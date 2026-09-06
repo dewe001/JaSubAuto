@@ -33,7 +33,7 @@ Jellyfin 刷新"的可选项，实现时没做——等扫库就够了，不值�
 **全部代码跑在 MoviePilot 进程内的插件里，不需要额外的服务或容器。**
 
 ```
-plugin/plugins.v2/jimakutrigger/
+plugin/plugins.v2/jasubauto/
 ├── __init__.py     MoviePilot 集成层：事件监听 + get_api + get_form + get_page
 └── core/           业务逻辑，不依赖任何 Web 框架
     ├── settings.py   普通 dataclass 配置（插件传 dict / 调试读 .env）
@@ -49,7 +49,7 @@ plugin/plugins.v2/jimakutrigger/
 
 **为什么手动页面能塞进插件**：MoviePilot 注册插件 API 的实现是 `router.add_api_route(**api)`，
 整个 dict 直接展开成 FastAPI 参数，所以 `"response_class": HTMLResponse` 可以透传。
-页面挂在 `/api/v1/plugin/JimakuTrigger/ui`，用 `auth: "apikey"`（浏览器直接打开带不了 Bearer 头）。
+页面挂在 `/api/v1/plugin/JaSubAuto/ui`，用 `auth: "apikey"`（浏览器直接打开带不了 Bearer 头）。
 `get_page()` 只放一个跳转链接，不用 Vuetify JSON 拼交互界面。
 
 ### 一度走过的弯路（别再走回去）
@@ -220,8 +220,8 @@ Jimaku Token、媒体库根目录、剧集白名单、片源偏好、试运行�
 ```
 JaSubAuto/                       # 本身就是一个 MoviePilot 插件仓库，布局与官方一致
 ├── package.v2.json                # 插件索引，version 必须与 plugin_version 一致
-├── icons/jimakutrigger.png
-├── plugins.v2/jimakutrigger/      # 项目主体，目录名 = 主类名小写
+├── icons/jasubauto.png
+├── plugins.v2/jasubauto/      # 项目主体，目录名 = 主类名小写
 │   ├── __init__.py                # MoviePilot 集成层
 │   ├── core/                      # 业务逻辑（见上面的架构图）
 │   └── data/                      # 运行数据（映射表 JSON）——不进仓库
@@ -242,9 +242,9 @@ JaSubAuto/                       # 本身就是一个 MoviePilot 插件仓库，
 核心原则：**把"能不能拿到字幕"和"能不能接上 MoviePilot"分开调**。80% 的代码不需要碰 MoviePilot。
 
 - **M0 命令行跑通核心链路** ✅ 已完成（2026-09-06）：`python -m service.cli --tmdb-id 209867 --season 1 --episode 5`。识别、集号换算、候选筛选、偏好排序、落盘路径计算全部验证通过；实测结论见上面「已验证的外部接口事实」。
-- **M1 手动网页** ✅ 已完成（2026-09-06）：脱机调试 `uvicorn service.main:app --port 8990`；生产是插件 API `/api/v1/plugin/JimakuTrigger/ui`。两边同一份 `ui.html`。
+- **M1 手动网页** ✅ 已完成（2026-09-06）：脱机调试 `uvicorn service.main:app --port 8990`；生产是插件 API `/api/v1/plugin/JaSubAuto/ui`。两边同一份 `ui.html`。
 - **M2 模拟入库事件** ✅ 已完成（2026-09-06）：`/api/jobs` 用模拟 payload 验证过（白名单、season=0、缺路径、非视频文件、已有字幕、跨季换算等边界）。
-- **M3 触发器插件** 🔶 代码已写好（`plugin/plugins.v2/jimakutrigger/`），**默认开启「探针模式」只打日志不转发**。还没装到 MoviePilot 上验证过，`_build_payload()` 里的字段名属于待核对状态。装上去触发一次整理，从日志里核对字段，确认后关掉探针模式。不要对着文档猜字段。
+- **M3 触发器插件** 🔶 代码已写好（`plugin/plugins.v2/jasubauto/`），**默认开启「探针模式」只打日志不转发**。还没装到 MoviePilot 上验证过，`_build_payload()` 里的字段名属于待核对状态。装上去触发一次整理，从日志里核对字段，确认后关掉探针模式。不要对着文档猜字段。
 
   插件转发的 payload 是 `{tmdb_id, title, type, files: [视频路径...]}`——**故意不传季集号**，由服务侧用 `scan.parse_video()` 从文件名解析，和批量补扫共用同一套代码。这样插件只依赖 `tmdb_id` 和文件列表两个字段，MoviePilot 改 meta 语义也不会跟着坏。
 
@@ -314,6 +314,14 @@ pytest tests/
 **是「搜索」不是「浏览」。** 番剧库动辄几百部，一进页面就把整库铺出来没法用，加筛选框也只是治标。
 所以 `library.find_shows()` 在关键字为空时**只报总数、不返回任何剧**，输了关键字才列匹配项。
 统计集数要递归扫目录，也只对匹配到的（≤30 部）做。手工指定目录的 `browse()` 收进折叠区兜底。
+
+## 版本控制纪律
+
+**禁止未经批准执行 `git commit` / `git push`。** 包括 `--amend`、`push -f`、`git tag`
+以及任何会改写远端历史的操作。改完代码就停下，把改了什么、影响什么讲清楚，由用户决定何时提交。
+
+同理适用于其它对外可见的动作：改仓库可见性、发 release、提 PR、改远端配置。
+「上次批准过一次提交」不构成对下一次的批准。
 
 ## 交付纪律（每次让用户去测之前必须做完）
 
