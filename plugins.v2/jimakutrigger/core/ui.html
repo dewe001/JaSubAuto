@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JaSubAuto · 日语字幕</title>
+<style>
+  :root { --bg:#f7f7f8; --card:#fff; --line:#e3e3e6; --ink:#1a1a1c; --dim:#6b6b70;
+          --accent:#2563eb; --good:#15803d; --warn:#b45309; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#141416; --card:#1d1d20; --line:#2e2e33; --ink:#eaeaec; --dim:#9a9aa2;
+            --accent:#60a5fa; --good:#4ade80; --warn:#fbbf24; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px 16px 60px; background:var(--bg); color:var(--ink);
+         font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:var(--dim); margin-bottom:20px; font-size:13px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:16px; margin-bottom:16px; }
+  .card h2 { font-size:14px; margin:0 0 12px; color:var(--dim); font-weight:600; }
+  label { display:block; font-size:12px; color:var(--dim); margin-bottom:4px; }
+  input[type=text], input[type=number] {
+    width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:6px;
+    background:var(--bg); color:var(--ink); font-size:14px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+  .row > div { flex:1; min-width:110px; }
+  button { padding:8px 16px; border:0; border-radius:6px; background:var(--accent);
+           color:#fff; font-size:14px; cursor:pointer; white-space:nowrap; }
+  button:disabled { opacity:.5; cursor:default; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  button.mini { padding:4px 10px; font-size:12px; }
+  .cand { border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:8px;
+          display:flex; gap:12px; align-items:flex-start; }
+  .cand.best { border-color:var(--good); }
+  .cand .body { flex:1; min-width:0; }
+  .cand .name { word-break:break-all; }
+  .tag { display:inline-block; font-size:11px; padding:1px 7px; border-radius:99px;
+         border:1px solid var(--line); color:var(--dim); margin-right:6px; }
+  .tag.ja { color:var(--good); border-color:var(--good); }
+  .tag.mix { color:var(--warn); border-color:var(--warn); }
+  .note { font-size:13px; padding:10px; border-radius:6px; background:var(--bg);
+          border:1px solid var(--line); }
+  .muted { color:var(--dim); font-size:12px; }
+  /* 说明文字一律收进这个问号里，鼠标悬浮才显示，别占版面 */
+  .q { display:inline-block; width:14px; height:14px; line-height:14px; text-align:center;
+       border:1px solid var(--line); border-radius:50%; color:var(--dim); font-size:10px;
+       cursor:help; margin-left:4px; vertical-align:middle; }
+  summary { cursor:pointer; color:var(--dim); font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>日语字幕</h1>
+  <div class="sub"><span id="health"></span>
+    <span class="tag" style="margin-left:6px">__BUILD__</span></div>
+
+  <!-- 1 · 补字幕 -->
+  <div class="card">
+    <h2>补字幕</h2>
+
+    <label>找剧</label>
+    <input type="text" id="showQ" placeholder="输入剧名，如：芙莉莲" autocomplete="off">
+    <div id="browseOut" style="margin:10px 0 14px"></div>
+
+    <details id="dirFallback" style="margin-bottom:14px">
+      <summary>手工指定目录</summary>
+      <div class="row" style="margin-top:8px">
+        <div style="flex:3"><input type="text" id="browsePath" placeholder="/媒体/日番"></div>
+        <div style="flex:0 0 auto; display:flex; gap:8px">
+          <button class="ghost" onclick="browseUp()">上一级</button>
+          <button onclick="browseDir()">列出</button>
+        </div>
+      </div>
+      <div id="browseDirOut" style="margin-top:10px"></div>
+    </details>
+
+    <div class="row">
+      <div style="flex:3"><label>番剧文件夹
+        <span class="q" title="递归扫描这个文件夹下的所有视频，逐集配日语字幕。已经有 .ja 字幕的集数会自动跳过，绝不覆盖。">?</span></label>
+        <input type="text" id="scanDir" placeholder="/媒体/日番/葬送的芙莉莲 (2023)"></div>
+      <div><label>TMDB ID
+        <span class="q" title="推荐。用离线映射表把媒体库的季集号换算到 AniList 体系，能正确处理分季错位（媒体库 S01E37 = AniList 第二季第 9 集）。从剧集目录的 tvshow.nfo 自动读取。">?</span></label>
+        <input type="number" id="scanTmdb" placeholder="209867"></div>
+      <div><label>AniList ID
+        <span class="q" title="备选。跳过识别，直接把文件名里的集号当作 AniList 集号。只在映射表查不到、且你确认两边编号一致时用。">?</span></label>
+        <input type="number" id="scanAnilist" placeholder="154587"></div>
+    </div>
+
+    <div style="margin:12px 0">
+      <label style="display:inline"><input type="checkbox" id="scanDry" checked> 试运行
+        <span class="q" title="只列出会下载哪些字幕、会写成什么文件名，不实际写盘。确认无误后点结果里的「确认写入」。">?</span></label>
+      <button style="margin-left:12px" onclick="runScan()">开始扫描</button>
+    </div>
+    <div id="scanOut"></div>
+  </div>
+
+  <!-- 2 · 单集手动挑（自动挑不出来时用） -->
+  <div class="card">
+    <details id="manualBox">
+      <summary>单集手动挑字幕
+        <span class="q" title="自动选不出唯一最优时（多个同分候选），扫描结果里那一集会标「待人工」，点它右边的「手动挑」就会填到这里。">?</span>
+      </summary>
+
+      <div class="row" style="margin-top:12px">
+        <div style="flex:3"><label>视频文件或所在文件夹</label>
+          <input type="text" id="videoPath" placeholder="/媒体/日番/某剧/Season 1/某剧 S01E05.mkv"></div>
+        <div style="flex:0 0 120px"><label>媒体库集号
+          <span class="q" title="视频文件名里写的那个集号。只在上面填的是文件夹时需要，用来定位具体哪个视频文件。">?</span></label>
+          <input type="number" id="libEp"></div>
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <div><label>AniList ID</label><input type="number" id="anilistId" placeholder="154587"></div>
+        <div><label>集号
+          <span class="q" title="AniList 口径的集号，和媒体库集号可能不同：媒体库 S01E37 对应 AniList 第二季第 9 集。">?</span></label>
+          <input type="number" id="episode" value="1"></div>
+        <div style="flex:0 0 auto"><button onclick="loadCandidates()">查候选</button></div>
+        <div style="flex:0 0 auto"><label style="display:inline">
+          <input type="checkbox" id="dryRun" checked> 试运行</label></div>
+      </div>
+
+      <div id="entryInfo" style="margin-top:12px"></div>
+      <div id="cands" style="margin-top:10px"></div>
+      <div id="result" style="margin-top:10px"></div>
+    </details>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// 同一份页面既由 MoviePilot 插件 API 提供，也由独立调试壳提供，
+// 两边接口前缀不同，由服务端把 __API_BASE__ 替换成实际值。
+const API = "__API_BASE__";
+const KEY = new URLSearchParams(location.search).get('apikey') || '';
+function U(path, params){
+  const q = new URLSearchParams(params || {});
+  if(KEY) q.set('apikey', KEY);
+  const s = q.toString();
+  return API + path + (s ? '?' + s : '');
+}
+function post(path, body){
+  return fetch(U(path), {method:'POST', headers:{'Content-Type':'application/json'},
+                         body: JSON.stringify(body)}).then(r=>r.json());
+}
+
+fetch(U('/health')).then(r=>r.json()).then(h=>{
+  $('health').textContent = (h.jimaku_token_configured ? 'Jimaku 已配置' : '⚠ 未配置 Jimaku Token')
+    + ' · .' + h.lang_suffix
+    + (h.preferred_sources.length ? ' · 片源偏好 ' + h.preferred_sources.join('>') : '');
+});
+
+// ---------- 找剧 ----------
+
+let BROWSE_PARENT = null, BROWSE_TIMER = null;
+
+// 进页面只问一下库里有多少部，不列内容——番剧库动辄几百部，铺出来没法看
+fetch(U('/library')).then(r=>r.json()).then(render(''));
+
+function render(where){
+  return d => {
+    const box = where === 'dir' ? $('browseDirOut') : $('browseOut');
+    const head = d.note ? `<div class="muted" style="margin-bottom:8px">${esc(d.note)}</div>` : '';
+    if(!d.entries || !d.entries.length){ box.innerHTML = head || ''; return; }
+    box.innerHTML = head + d.entries.map(e => {
+      const cn = e.title && e.title !== e.name
+        ? ` <span class="muted">(${esc(e.title)}${e.year?' '+esc(e.year):''})</span>` : '';
+      const stat = e.video_count
+        ? `<span class="tag">${e.video_count} 集</span>` +
+          (e.missing ? `<span class="tag mix">缺 ${e.missing} 集</span>`
+                     : `<span class="tag ja">已齐</span>`)
+        : (e.subdir_count ? `<span class="tag">${e.subdir_count} 个子文件夹</span>` : '');
+      const id = e.tmdb_id ? `<span class="tag ja">tmdb=${e.tmdb_id}</span>` : '';
+      // 路径一律走 data-* 属性 + 事件委托，不用内联 onclick：
+      // 路径里可能有引号、括号、反斜杠，拼进 onclick 属性里迟早出事（已经出过一次）
+      const attrs = `data-path="${esc(e.path)}" data-tmdb="${e.tmdb_id || ''}"`;
+      return `<div class="cand">
+        <div class="body">
+          <div class="name"><a href="#" data-act="dir" ${attrs}>${esc(e.name)}</a>${cn}</div>
+          <div style="margin-top:5px">${stat}${id}
+            ${e.note ? `<span class="tag mix">${esc(e.note)}</span>` : ''}</div>
+        </div>
+        <button data-act="pick" ${attrs}>选它</button>
+      </div>`;
+    }).join('');
+  };
+}
+
+// 边打字边搜，防抖 300ms
+document.addEventListener('input', ev => {
+  if(ev.target.id !== 'showQ') return;
+  clearTimeout(BROWSE_TIMER);
+  BROWSE_TIMER = setTimeout(async () => {
+    const q = $('showQ').value.trim();
+    if(q) $('browseOut').innerHTML = '<div class="muted">搜索中…</div>';
+    render('')(await (await fetch(U('/library', {q}))).json());
+  }, 300);
+});
+
+async function browseDir(path){
+  const target = path !== undefined ? path : $('browsePath').value.trim();
+  if(!target) return;
+  $('browsePath').value = target;
+  $('dirFallback').open = true;
+  $('browseDirOut').innerHTML = '<div class="muted">读取中…</div>';
+  const d = await (await fetch(U('/browse', {path: target}))).json();
+  BROWSE_PARENT = d.parent;
+  render('dir')(d);
+}
+
+function browseUp(){ if(BROWSE_PARENT) browseDir(BROWSE_PARENT); }
+
+function useFolder(path, tmdbId){
+  $('scanDir').value = path;
+  if(tmdbId) $('scanTmdb').value = tmdbId;
+  $('scanDir').scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+// ---------- 批量补扫 ----------
+
+const SCAN_STATUS = {
+  ok:               ['✅ 已写入',   'ja'],
+  dry_run:          ['◻ 待写入',    ''],
+  skipped_existing: ['⏭ 已有字幕',  ''],
+  unparsed:         ['⏭ 非正片',    ''],
+  not_found:        ['✖ 无匹配',    'mix'],
+  needs_review:     ['⚠ 待人工',    'mix'],
+  unidentified:     ['⚠ 未识别',    'mix'],
+  error:            ['✖ 失败',      'mix'],
+};
+// 这些状态自动挑不出结果，得给个转手动的入口，否则用户没法往下走
+const NEEDS_MANUAL = new Set(['needs_review', 'not_found', 'unidentified']);
+
+async function runScan(force){
+  const dryRun = force === undefined ? $('scanDry').checked : force;
+  const dir = $('scanDir').value.trim();
+  if(!dir){ alert('请先填写番剧文件夹'); return; }
+  if(!$('scanTmdb').value && !$('scanAnilist').value){
+    alert('请填 TMDB ID 或 AniList ID'); return; }
+  $('scanOut').innerHTML = '<div class="muted">扫描中…（Jimaku 限速 25 请求/分钟，请稍候）</div>';
+  const d = await post('/scan', {dir, tmdb_id: $('scanTmdb').value,
+                                 anilist_id: $('scanAnilist').value, dry_run: dryRun});
+
+  if(d.note && !d.episodes.length){
+    $('scanOut').innerHTML = `<div class="note">❌ ${esc(d.note)}</div>`; return; }
+
+  const sum = Object.entries(d.summary).map(([k,v]) =>
+    `<span class="tag ${(SCAN_STATUS[k]||['',''])[1]}">${esc((SCAN_STATUS[k]||[k])[0])} ${v}</span>`).join('');
+
+  // 试运行只是列清单，得给出"下一步点哪儿"，否则用户对着结果不知道怎么落盘
+  const pending = d.summary.dry_run || 0;
+  const action = d.dry_run && pending
+    ? `<div style="margin-top:10px"><button data-act="commit">确认写入这 ${pending} 集字幕</button>
+         <span class="muted" style="margin-left:10px">已有字幕的不会被覆盖</span></div>`
+    : (!d.dry_run && (d.summary.ok || 0)
+        ? `<div class="muted" style="margin-top:8px">已写入 ${d.summary.ok} 集</div>` : '');
+
+  $('scanOut').innerHTML = `
+    <div class="note" style="margin-bottom:10px">
+      <code>${esc(d.root)}</code> · ${d.total_videos} 个视频${d.dry_run?' · <b>试运行</b>':''}
+      <div style="margin-top:6px">${sum}</div>
+      ${d.note ? `<div class="muted" style="margin-top:6px">${esc(d.note)}</div>` : ''}
+      ${action}
+    </div>` +
+    d.episodes.map(e => {
+      const [label, cls] = SCAN_STATUS[e.status] || [e.status, ''];
+      const manual = NEEDS_MANUAL.has(e.status)
+        ? `<button class="mini ghost" data-act="manual" data-path="${esc(e.video)}"
+             data-anilist="${e.anilist_id || ''}" data-ep="${e.anilist_episode || ''}"
+             data-libep="${e.library_episode || ''}">手动挑</button>` : '';
+      return `<div class="cand"><div class="body">
+        <div class="name">${esc(basename(e.video))}</div>
+        <div style="margin-top:5px">
+          <span class="tag ${cls}">${esc(label)}</span>
+          <span class="tag">第 ${e.library_episode==null?'?':e.library_episode} 集</span>
+          ${e.anilist_episode!=null && e.anilist_episode!==e.library_episode
+            ? `<span class="tag">AniList 第 ${e.anilist_episode} 集</span>` : ''}
+          ${e.lang ? `<span class="tag ja">${esc(e.lang)}</span>` : ''}
+        </div>
+        ${e.picked ? `<div class="muted" style="margin-top:4px">选用 ${esc(e.picked)}</div>` : ''}
+        ${e.target ? `<div class="muted" style="margin-top:2px">${d.dry_run?'将写入':'已写入'}
+           <code>${esc(basename(e.target))}</code></div>` : ''}
+        ${e.reason && !e.target ? `<div class="muted" style="margin-top:2px">${esc(e.reason)}</div>` : ''}
+      </div>${manual}</div>`;
+    }).join('');
+}
+
+// ---------- 单集手动挑 ----------
+
+/** 从扫描结果的某一集转到手动模式：填好参数并直接查候选，省得用户自己抄 ID。 */
+function toManual(el){
+  $('videoPath').value = el.getAttribute('data-path') || '';
+  $('libEp').value     = el.getAttribute('data-libep') || '';
+  $('anilistId').value = el.getAttribute('data-anilist') || '';
+  $('episode').value   = el.getAttribute('data-ep') || '';
+  $('manualBox').open = true;
+  $('manualBox').scrollIntoView({behavior:'smooth', block:'start'});
+  if($('anilistId').value && $('episode').value) loadCandidates();
+}
+
+async function loadCandidates(){
+  if(!$('anilistId').value){ alert('缺 AniList ID'); return; }
+  $('cands').innerHTML = '<div class="muted">查询中…</div>';
+  $('entryInfo').innerHTML = '';
+  const d = await (await fetch(U('/candidates',
+    {anilist_id: $('anilistId').value, episode: $('episode').value}))).json();
+  if(d.entries && d.entries.length){
+    const e = d.entries[0];
+    $('entryInfo').innerHTML = `<div class="note">${esc(e.name)}
+      <span class="muted">${esc(e.japanese_name||'')} · ${d.file_count} 个文件</span></div>`;
+  }
+  if(!d.candidates.length){
+    $('cands').innerHTML = `<div class="note">${esc(d.reason)}</div>`; return;
+  }
+  $('cands').innerHTML = `<div class="muted" style="margin-bottom:8px">${esc(d.reason)}</div>` +
+    d.candidates.map(c => {
+      const best = d.chosen && d.chosen.name === c.name;
+      const cls = (c.lang==='ja'||c.lang==='unknown') ? 'ja'
+                : (c.lang==='ja_cc'||c.lang==='ja_zh') ? '' : 'mix';
+      return `<div class="cand ${best?'best':''}">
+        <div class="body">
+          <div class="name">${esc(c.name)}</div>
+          <div style="margin-top:5px">
+            <span class="tag ${cls}">${esc(c.lang_label)}</span>
+            <span class="tag">${(c.size/1024).toFixed(0)} KB</span>
+            <span class="tag">${esc((c.last_modified||'').slice(0,10))}</span>
+            ${best?'<span class="tag ja">推荐</span>':''}
+          </div>
+        </div>
+        <button data-act="dl" data-url="${esc(c.url)}" data-name="${esc(c.name)}">下载</button>
+      </div>`;
+    }).join('');
+}
+
+async function download(url, name){
+  const videoPath = $('videoPath').value.trim();
+  if(!videoPath){ alert('请先填写视频文件路径'); return; }
+  $('result').innerHTML = '<div class="muted">处理中…</div>';
+  const d = await post('/download', {url, name, video_path: videoPath,
+                                     library_episode: $('libEp').value,
+                                     dry_run: $('dryRun').checked});
+  if(d.detail){ $('result').innerHTML = `<div class="note">❌ ${esc(d.detail)}</div>`; return; }
+  if(!d.target){ $('result').innerHTML = `<div class="note">❌ ${esc(d.reason)}</div>`; return; }
+  $('result').innerHTML = `<div class="note">
+    ${d.written ? '✅ 已写入' : 'ℹ️ ' + esc(d.reason)}
+    <div style="margin-top:4px"><code>${esc(basename(d.target))}</code></div></div>`;
+}
+
+// ---------- 事件委托 ----------
+// 列表是动态生成的，绑在 document 上比给每行挂 onclick 可靠
+
+document.addEventListener('click', ev => {
+  const el = ev.target.closest('[data-act]');
+  if(!el) return;
+  ev.preventDefault();
+  const act = el.dataset.act;
+  if(act === 'dir') browseDir(el.getAttribute('data-path'));
+  else if(act === 'pick'){
+    const t = el.getAttribute('data-tmdb');
+    useFolder(el.getAttribute('data-path'), t ? Number(t) : null);
+  }
+  else if(act === 'dl') download(el.getAttribute('data-url'), el.getAttribute('data-name'));
+  else if(act === 'commit') runScan(false);
+  else if(act === 'manual') toManual(el);
+});
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// 取路径最后一段。\ 就是反斜杠——直接写会在多层转义里被吃掉，已经踩过
+function basename(p){ return String(p == null ? '' : p).split(/[/\u005C]/).pop(); }
+</script>
+</body>
+</html>

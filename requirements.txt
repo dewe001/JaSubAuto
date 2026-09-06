@@ -1,0 +1,8 @@
+# 插件本身零额外依赖：核心逻辑只用标准库 + MoviePilot 容器里已有的 requests，
+# 所以插件目录下没有 requirements.txt，装上就能用。
+#
+# 下面这些只给脱机调试壳子（service/）用，生产环境不需要装。
+httpx
+fastapi
+uvicorn[standard]
+pytest

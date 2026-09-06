@@ -1,0 +1,23 @@
+{
+  "JimakuTrigger": {
+    "id": "JimakuTrigger",
+    "name": "日语字幕补全（Jimaku）",
+    "description": "入库后自动从 jimaku.cc 补日语字幕，并提供手动挑选与整部剧批量补扫的网页。无需额外服务或容器。",
+    "version": "0.5.1",
+    "icon": "https://raw.githubusercontent.com/dewe001/JaSubAuto/main/icons/jimakutrigger.png",
+    "author": "dewe001",
+    "level": 1,
+    "labels": [
+      "字幕"
+    ],
+    "history": {
+      "v0.5.1": "仓库改为 MoviePilot 标准插件仓库布局（根目录 package.v2.json + plugins.v2/ + icons/），换成自己的图标",
+      "v0.5.0": "页面精简：删掉「找剧」「查候选字幕」两个独立模块，说明文字收进问号悬浮提示；自动挑不出来的集直接给「手动挑」按钮，一点就填好参数并列出候选",
+      "v0.4.1": "试运行结果里直接给出「确认写入」按钮并显示将生成的字幕文件名，不用再回去改复选框；修 basename 只按 / 切路径的问题",
+      "v0.4.0": "修手动页面：搜索式选剧（不再铺满整库）；路径改用 data 属性传递，修复剧名含引号时整行渲染坏掉、「选它」按钮消失的问题；补 UI 与核心逻辑的自动化测试",
+      "v0.3.0": "合并为单插件：业务逻辑内置，手动页面由插件 API 直接返回 HTML，不再需要独立服务/容器",
+      "v0.2.0": "插件详情页加上手动页面入口",
+      "v0.1.0": "首版：探针模式打印 TransferComplete 真实结构"
+    }
+  }
+}

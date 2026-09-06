@@ -1,0 +1,29 @@
+# 密钥与本地配置
+.env
+.env.local
+
+# 运行数据：下载的映射表（7.5MB）
+service/data/
+*.db
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Claude Code 的本地设置
+.claude/settings.local.json
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# 插件运行数据（映射表 JSON）
+plugins.v2/jimakutrigger/data/
