@@ -1,7 +1,7 @@
 """脱机调试用的 FastAPI 壳子：把 core/ 的能力按和插件一致的路径暴露出来。
 
 生产环境不需要它——装插件就够了。它的用途是不启动 MoviePilot 也能调核心逻辑，
-接口路径与插件 API 一一对应（插件是 /api/v1/plugin/JimakuTrigger/xxx，这里是 /api/xxx），
+接口路径与插件 API 一一对应（插件是 /api/v1/plugin/JaSubAuto/xxx，这里是 /api/xxx），
 共用同一份 ui.html，所以两边界面完全一样。
 
     uvicorn service.main:app --port 8990

@@ -1,6 +1,6 @@
 """脱机调试壳子。
 
-真正的实现在 plugins.v2/jimakutrigger/core/，插件和这里共用同一份代码——
+真正的实现在 plugins.v2/jasubauto/core/，插件和这里共用同一份代码——
 只有一份实现，不存在"服务侧和插件侧行为不一致"的问题。
 
 这个壳子存在的意义只有一个：不启动 MoviePilot 也能调核心逻辑。
@@ -13,7 +13,7 @@ from dataclasses import fields
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-PLUGIN_DIR = PROJECT_ROOT / "plugins.v2" / "jimakutrigger"
+PLUGIN_DIR = PROJECT_ROOT / "plugins.v2" / "jasubauto"
 
 if str(PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(PLUGIN_DIR))

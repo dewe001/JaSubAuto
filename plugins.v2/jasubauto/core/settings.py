@@ -2,7 +2,7 @@
 
 刻意做成普通 dataclass 而不是 pydantic-settings：核心逻辑要能在 MoviePilot 进程内
 直接跑，多一个依赖就多一分装不上的风险。两种填充方式：
-  * 插件里：JimakuTrigger.init_plugin() 拿到配置 dict 后调 configure()
+  * 插件里：JaSubAuto.init_plugin() 拿到配置 dict 后调 configure()
   * 独立调试：load_env() 读项目根目录的 .env
 """
 

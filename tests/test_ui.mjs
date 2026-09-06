@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import assert from "node:assert/strict";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const UI = join(HERE, "..", "plugins.v2", "jimakutrigger", "core", "ui.html");
+const UI = join(HERE, "..", "plugins.v2", "jasubauto", "core", "ui.html");
 
 // ---------- 最小 DOM 桩 ----------
 

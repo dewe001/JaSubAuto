@@ -24,7 +24,7 @@ from .core import identify, jimaku, library, picker, placer, scan as scanner
 from .core.settings import configure, settings as core_settings
 
 UI_HTML = Path(__file__).parent / "core" / "ui.html"
-API_BASE = "/api/v1/plugin/JimakuTrigger"
+API_BASE = "/api/v1/plugin/JaSubAuto"
 
 
 def _dump(obj: Any, depth: int = 0) -> Any:
@@ -58,7 +58,7 @@ def _build_stamp() -> str:
         ts = time.strftime("%m-%d %H:%M", time.localtime(UI_HTML.stat().st_mtime))
     except OSError:
         ts = "?"
-    return f"v{JimakuTrigger.plugin_version} · {ts}"
+    return f"v{JaSubAuto.plugin_version} · {ts}"
 
 
 def _attr(obj, name):
@@ -114,14 +114,14 @@ def _target_files(transferinfo) -> list:
     return []
 
 
-class JimakuTrigger(_PluginBase):
+class JaSubAuto(_PluginBase):
     plugin_name = "日语字幕补全（Jimaku）"
     plugin_desc = "入库后自动从 jimaku.cc 补日语字幕，并提供手动挑选/整部剧批量补扫的网页"
-    plugin_icon = "jimakutrigger.png"          # 解析到本仓库的 icons/ 下
-    plugin_version = "0.5.1"
+    plugin_icon = "jasubauto.png"          # 解析到本仓库的 icons/ 下
+    plugin_version = "0.6.0"
     plugin_author = "dewe001"
     author_url = "https://github.com/dewe001"
-    plugin_config_prefix = "jimakutrigger_"
+    plugin_config_prefix = "jasubauto_"
     plugin_order = 20
     auth_level = 1
 

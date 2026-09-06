@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "plugins.v2" / "jimakutrigger"))
+sys.path.insert(0, str(PROJECT_ROOT / "plugins.v2" / "jasubauto"))
 
 from core import identify, library, picker, placer, scan  # noqa: E402
 from core.settings import settings  # noqa: E402
