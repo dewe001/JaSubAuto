@@ -45,8 +45,13 @@ _EPISODE_PATTERNS = (
 
 
 # ---------- 语言纯度 ----------
-# 用途：学日语，干净的纯日语台词最优，含听障注释的次之，日中双语再次，日英/纯外语基本没用。
+# 用途是学日语，日英/纯外语基本没用，所以语言构成是主导项。
+# 两种偏好（配置项「字幕偏好」）：
+#   * 中日双语优先（默认）：遇到生词不用停下来查，学习效率高
+#   * 纯日语优先：不想看到中文时用
 # Jimaku 是日语字幕站，没有任何语言标记的文件绝大多数就是纯日语，因此给次高分。
+# 说话人标注（CC/SDH）已经由 cleaner.py 在写盘前清掉，但它仍排在干净台词之后——
+# 清洗只能删标注，删不掉听写体带来的其它差异。
 LANG_SCORES = {
     "ja": 300,        # 纯日语、纯台词
     "unknown": 280,   # 无语言标记，在 Jimaku 上大概率是纯日语；电视/BD 源一般也没有听障注释
@@ -55,6 +60,9 @@ LANG_SCORES = {
     "ja_other": 60,   # 日英等其它双语
     "non_ja": 20,     # 压根没有日语
 }
+# 中日双语优先（默认）：日语台词旁边就有中文，遇到生词不用停下来查
+LANG_SCORES_BILINGUAL = {**LANG_SCORES, "ja_zh": 320}
+
 LANG_LABELS = {
     "ja": "纯日语",
     "unknown": "无语言标记（大概率纯日语）",
@@ -63,6 +71,11 @@ LANG_LABELS = {
     "ja_other": "日+其它语言双语",
     "non_ja": "不含日语",
 }
+
+def lang_scores() -> dict:
+    """按配置的字幕偏好取一张打分表。两张表只差 ja_zh 一项的位置。"""
+    return LANG_SCORES_BILINGUAL if settings.subtitle_pref != "japanese" else LANG_SCORES
+
 
 _ZH_JA_SUBSTR = ("jpsc", "jptc", "scjp", "tcjp", "中日", "日中", "简日", "繁日", "日简", "日繁")
 _ZH_TOKENS = {"sc", "tc", "chs", "cht", "gb", "big5", "zh", "chi", "chn", "cn", "简体", "繁体", "繁體", "中文"}
@@ -140,14 +153,17 @@ def _score(name: str, lang: str, lang_label: str) -> tuple[int, list[str]]:
 
     语言纯度是主导项：学日语的场景下，一个纯日语的冷门源也好过日英双语的热门源。
     """
-    score = LANG_SCORES.get(lang, 0)
+    score = lang_scores().get(lang, 0)
     reasons = [f"{lang_label} +{score}"]
     keywords = settings.preferred_keywords
     for rank, kw in enumerate(keywords):
         if kw.lower() in name.lower():
-            gain = (len(keywords) - rank) * 10
+            # 上限 19：语言分档最小间距是 20，片源偏好再怎么加也不能把低一档的顶上来。
+            # 只算优先级最高的那个命中，多个关键词命中同一个文件时不叠加。
+            gain = min(len(keywords) - rank, 19)
             score += gain
             reasons.append(f"片源偏好「{kw}」+{gain}")
+            break
     return score, reasons
 
 

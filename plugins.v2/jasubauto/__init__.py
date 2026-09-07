@@ -118,7 +118,7 @@ class JaSubAuto(_PluginBase):
     plugin_name = "日语字幕补全（Jimaku）"
     plugin_desc = "入库后自动从 jimaku.cc 补日语字幕，并提供手动挑选/整部剧批量补扫的网页"
     plugin_icon = "jasubauto.png"          # 解析到本仓库的 icons/ 下
-    plugin_version = "0.6.0"
+    plugin_version = "0.7.0"
     plugin_author = "dewe001"
     author_url = "https://github.com/dewe001"
     plugin_config_prefix = "jasubauto_"
@@ -141,6 +141,10 @@ class JaSubAuto(_PluginBase):
             "series_whitelist": config.get("series_whitelist", ""),
             "subtitle_lang_suffix": config.get("lang_suffix", "") or "ja",
             "fansub_whitelist": config.get("fansub_whitelist", ""),
+            "subtitle_pref": config.get("subtitle_pref", "") or "bilingual",
+            "strip_annotations": config.get("strip_annotations", True),
+            "merge_bilingual": config.get("merge_bilingual", True),
+            "keep_japanese_only": config.get("keep_japanese_only", True),
             "media_roots": config.get("media_roots", ""),
             "data_dir": self._data_dir(),
         })
@@ -210,6 +214,10 @@ class JaSubAuto(_PluginBase):
             "jimaku_token_configured": bool(core_settings.jimaku_api_token),
             "lang_suffix": core_settings.subtitle_lang_suffix,
             "preferred_sources": core_settings.preferred_keywords,
+            "subtitle_pref": core_settings.subtitle_pref,
+            "strip_annotations": core_settings.strip_annotations,
+            "merge_bilingual": core_settings.merge_bilingual,
+            "keep_japanese_only": core_settings.keep_japanese_only,
         }
 
     def api_library(self, q: str = "", root: str = "") -> dict:
@@ -261,15 +269,19 @@ class JaSubAuto(_PluginBase):
         lib_ep = int(lib_ep) if lib_ep not in (None, "") else None
         dry = payload.get("dry_run")
         dry = core_settings.dry_run if dry is None else bool(dry)
+        # 覆盖只可能从手动页面来：人看着候选列表点的，和自动入库那条路无关
+        overwrite = bool(payload.get("overwrite"))
 
         # 先确认能定位到唯一视频，定位不了就别浪费 Jimaku 配额（限速 25/分钟）
         video, note = placer.resolve_video(video_path, lib_ep)
         if video is None:
             return {"target": "", "written": False, "reason": note, "video": "", "video_note": ""}
         content = None if dry else jimaku.download(url)
-        out = placer.place(video_path, name, content, dry_run=dry, library_episode=lib_ep)
+        out = placer.place(video_path, name, content, dry_run=dry, library_episode=lib_ep,
+                           overwrite=overwrite)
         return {"target": str(out.target), "written": out.written, "reason": out.reason,
-                "video": str(out.video) if out.video else "", "video_note": out.video_note}
+                "video": str(out.video) if out.video else "", "video_note": out.video_note,
+                "replaced": out.replaced, "merged": out.merged}
 
     def api_scan(self, payload: dict) -> dict:
         rep = scanner.scan(
@@ -277,6 +289,7 @@ class JaSubAuto(_PluginBase):
             tmdb_id=int(payload["tmdb_id"]) if payload.get("tmdb_id") else None,
             anilist_id=int(payload["anilist_id"]) if payload.get("anilist_id") else None,
             dry_run=None if payload.get("dry_run") is None else bool(payload["dry_run"]),
+            overwrite=bool(payload.get("overwrite")),
         )
         return {"root": rep.root, "dry_run": rep.dry_run, "total_videos": rep.total_videos,
                 "note": rep.note, "summary": rep.summary,
@@ -317,6 +330,19 @@ class JaSubAuto(_PluginBase):
                     col(6, "VTextField", {"model": "lang_suffix", "label": "字幕语言后缀",
                                           "placeholder": "ja"}),
                 ]},
+                {"component": "VRow", "content": [
+                    col(12, "VSwitch", {"model": "keep_japanese_only",
+                                        "label": "合并成双语后，另存一份纯日语（<视频名>.原文.ja.srt）"}),
+                ]},
+                {"component": "VRow", "content": [
+                    col(4, "VSelect", {"model": "subtitle_pref", "label": "字幕偏好",
+                                       "items": [{"title": "中日双语优先（查词方便）", "value": "bilingual"},
+                                                 {"title": "纯日语优先", "value": "japanese"}]}),
+                    col(4, "VSwitch", {"model": "strip_annotations",
+                                       "label": "去掉说话人标注与音效描述"}),
+                    col(4, "VSwitch", {"model": "merge_bilingual",
+                                       "label": "与旁边的中文字幕合成双语"}),
+                ]},
                 {"component": "VRow", "content": [{
                     "component": "VCol", "props": {"cols": 12},
                     "content": [{"component": "VAlert", "props": {
@@ -327,7 +353,9 @@ class JaSubAuto(_PluginBase):
             ],
         }], {"enabled": False, "probe_only": True, "dry_run": True,
              "jimaku_api_token": "", "media_roots": "", "series_whitelist": "",
-             "fansub_whitelist": "Netflix,Amazon,SubsPlease,Moozzi2", "lang_suffix": "ja"}
+             "fansub_whitelist": "Netflix,Amazon,SubsPlease,Moozzi2", "lang_suffix": "ja",
+             "subtitle_pref": "bilingual", "strip_annotations": True,
+             "merge_bilingual": True, "keep_japanese_only": True}
 
     def get_page(self) -> List[dict]:
         """详情页只放一个入口，真正的手动界面是插件 API 返回的那张 HTML 页。"""
