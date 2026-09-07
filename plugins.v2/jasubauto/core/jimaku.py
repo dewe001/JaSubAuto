@@ -16,7 +16,7 @@ from . import http
 from .settings import settings
 
 BASE = "https://jimaku.cc/api"
-UA = "JaSubAuto/0.5.1 (+https://github.com/dewe001/JaSubAuto)"
+UA = "JaSubAuto (+https://github.com/dewe001/JaSubAuto)"
 
 RATE_LIMIT = 25          # 官方限制：25 请求/分钟
 RATE_WINDOW = 60.0

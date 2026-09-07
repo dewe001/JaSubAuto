@@ -38,7 +38,11 @@ def health() -> dict:
     return {"ok": True, "dry_run": settings.dry_run,
             "jimaku_token_configured": bool(settings.jimaku_api_token),
             "lang_suffix": settings.subtitle_lang_suffix,
-            "preferred_sources": settings.preferred_keywords}
+            "preferred_sources": settings.preferred_keywords,
+            "subtitle_pref": settings.subtitle_pref,
+            "strip_annotations": settings.strip_annotations,
+            "merge_bilingual": settings.merge_bilingual,
+            "keep_japanese_only": settings.keep_japanese_only}
 
 
 @app.get("/api/library")
@@ -97,14 +101,17 @@ def api_download(payload: dict = Body(...)) -> dict:
     lib_ep = int(lib_ep) if lib_ep not in (None, "") else None
     dry = payload.get("dry_run")
     dry = settings.dry_run if dry is None else bool(dry)
+    overwrite = bool(payload.get("overwrite"))
 
     video, note = placer.resolve_video(video_path, lib_ep)
     if video is None:
         return {"target": "", "written": False, "reason": note, "video": "", "video_note": ""}
     content = None if dry else jimaku.download(url)
-    out = placer.place(video_path, name, content, dry_run=dry, library_episode=lib_ep)
+    out = placer.place(video_path, name, content, dry_run=dry, library_episode=lib_ep,
+                       overwrite=overwrite)
     return {"target": str(out.target), "written": out.written, "reason": out.reason,
-            "video": str(out.video) if out.video else "", "video_note": out.video_note}
+            "video": str(out.video) if out.video else "", "video_note": out.video_note,
+            "replaced": out.replaced, "merged": out.merged}
 
 
 @app.post("/api/scan")
@@ -112,7 +119,8 @@ def api_scan(payload: dict = Body(...)) -> dict:
     rep = scanner.scan(payload.get("dir") or "",
                        tmdb_id=int(payload["tmdb_id"]) if payload.get("tmdb_id") else None,
                        anilist_id=int(payload["anilist_id"]) if payload.get("anilist_id") else None,
-                       dry_run=None if payload.get("dry_run") is None else bool(payload["dry_run"]))
+                       dry_run=None if payload.get("dry_run") is None else bool(payload["dry_run"]),
+                       overwrite=bool(payload.get("overwrite")))
     return {"root": rep.root, "dry_run": rep.dry_run, "total_videos": rep.total_videos,
             "note": rep.note, "summary": rep.summary,
             "episodes": [vars(e) for e in rep.episodes]}

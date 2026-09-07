@@ -16,7 +16,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "plugins.v2" / "jasubauto"))
 
-from core import identify, library, picker, placer, scan  # noqa: E402
+from core import cleaner, identify, library, merge, picker, placer, scan  # noqa: E402
 from core.settings import settings  # noqa: E402
 
 
@@ -36,6 +36,10 @@ def _settings(tmp_path_factory):
     settings.fansub_whitelist = "Netflix,Amazon,SubsPlease,Moozzi2"
     settings.media_roots = ""
     settings.dry_run = True
+    settings.subtitle_pref = "bilingual"
+    settings.strip_annotations = True
+    settings.merge_bilingual = True
+    settings.keep_japanese_only = True
     yield
 
 
@@ -92,6 +96,36 @@ def test_pick_prefers_clean_japanese_over_cc():
     assert chosen.name.startswith("[SubsPlease]")
 
 
+def test_pick_prefers_bilingual_by_default():
+    """默认偏好是中日双语：日语旁边就有中文，遇到生词不用停下来查。"""
+    files = [
+        {"name": "[SubsPlease] Show - 05 (1080p) [ABC]_ja.srt", "url": "u1", "size": 1, "last_modified": "x"},
+        {"name": "[Nekomoe kissaten] Show [05][Web].JPSC.ass", "url": "u2", "size": 1, "last_modified": "x"},
+    ]
+    _, chosen, _ = picker.pick(files, 5)
+    assert chosen.lang == "ja_zh"
+
+
+def test_pick_falls_back_to_japanese_when_no_bilingual():
+    """双语优先只是把 ja_zh 抬到最前，没有双语时照样选纯日语，不会挑不出来。"""
+    files = [
+        {"name": "Show.S01E05.WEBRip.Netflix.ja[cc].srt", "url": "u1", "size": 1, "last_modified": "x"},
+        {"name": "[SubsPlease] Show - 05 (1080p) [ABC]_ja.srt", "url": "u2", "size": 1, "last_modified": "x"},
+    ]
+    _, chosen, _ = picker.pick(files, 5)
+    assert chosen.lang == "ja"
+
+
+def test_pick_japanese_mode_demotes_bilingual():
+    settings.subtitle_pref = "japanese"
+    files = [
+        {"name": "[SubsPlease] Show - 05 (1080p) [ABC]_ja.srt", "url": "u1", "size": 1, "last_modified": "x"},
+        {"name": "[Nekomoe kissaten] Show [05][Web].JPSC.ass", "url": "u2", "size": 1, "last_modified": "x"},
+    ]
+    _, chosen, _ = picker.pick(files, 5)
+    assert chosen.lang == "ja"
+
+
 def test_pick_refuses_when_tied():
     """分不出唯一最优就交人工，绝不瞎选。"""
     settings.fansub_whitelist = ""
@@ -99,6 +133,263 @@ def test_pick_refuses_when_tied():
              for i in range(3)]
     cands, chosen, reason = picker.pick(files, 5)
     assert len(cands) == 3 and chosen is None and "人工" in reason
+
+
+# ---------- 清洗说话人标注 ----------
+
+SRT_WITH_LABELS = """1
+00:00:01,000 --> 00:00:03,000
+（フリーレン）そうだね
+（ハイター）ああ
+
+2
+00:00:04,000 --> 00:00:05,000
+（ドアが開く音）
+
+3
+00:00:06,000 --> 00:00:07,000
+♪〜
+
+4
+00:00:08,000 --> 00:00:09,000
+面白い（笑）
+"""
+
+
+def test_clean_srt_strips_speaker_labels():
+    out, removed = cleaner.clean(SRT_WITH_LABELS.encode("utf-8"), "x_ja.srt")
+    text = out.decode("utf-8")
+    assert removed == 4
+    assert "（フリーレン）" not in text and "そうだね" in text
+    # 整条只有音效/音符的字幕直接丢掉，剩下的序号要重新连续
+    assert "（ドアが開く音）" not in text and "♪" not in text
+    assert text.startswith("1\n") and "\n2\n" in text and "\n3\n" not in text
+    # 行中间的括号是台词的一部分，不能碰
+    assert "面白い（笑）" in text
+
+
+def test_clean_ass_keeps_typesetting_and_chinese():
+    ass = (
+        "[Events]\n"
+        "Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,"
+        "{\\an8}（アイゼン）行こう\\N（ハイター）うん\n"
+        "Dialogue: 0,0:00:06.00,0:00:07.00,Sign,,0,0,0,,{\\p1}m 0 0 l 10 10{\\p0}\n"
+        "Dialogue: 0,0:00:08.00,0:00:09.00,Default,,0,0,0,,そうか\\N原来如此\n"
+    )
+    out, removed = cleaner.clean(ass.encode("utf-8"), "y.JPSC.ass")
+    text = out.decode("utf-8")
+    assert removed == 2
+    assert "（アイゼン）" not in text and "{\\an8}行こう" in text
+    # 只有特效标签的排版行不能被当成"清空了"而丢掉——它本来就没有标注可删
+    assert "m 0 0 l 10 10" in text
+    assert "そうか\\N原来如此" in text
+
+
+def test_clean_leaves_unknown_format_alone():
+    raw = "{100}{200}（誰か）やあ".encode("utf-8")
+    assert cleaner.clean(raw, "a.sub") == (raw, 0)
+
+
+def test_clean_returns_original_bytes_when_nothing_removed():
+    """没删到东西就原样返回原始字节：编码万一猜错也不会把文件重写成乱码。"""
+    raw = "1\n00:00:01,000 --> 00:00:02,000\nこんにちは\n".encode("cp932")
+    assert cleaner.clean(raw, "b.srt") == (raw, 0)
+
+
+def test_place_strips_annotations_on_write(tmp_path):
+    video = tmp_path / "Show S01E05.mkv"
+    video.write_bytes(b"")
+    out = placer.place(str(video), "x_ja.srt", SRT_WITH_LABELS.encode("utf-8"), dry_run=False)
+    assert out.written and out.stripped == 4
+    assert "（フリーレン）" not in out.target.read_text(encoding="utf-8")
+
+
+def test_place_can_keep_annotations(tmp_path):
+    """开关关掉时必须一个字都不改。"""
+    settings.strip_annotations = False
+    video = tmp_path / "Show S01E05.mkv"
+    video.write_bytes(b"")
+    out = placer.place(str(video), "x_ja.srt", SRT_WITH_LABELS.encode("utf-8"), dry_run=False)
+    assert out.written and out.stripped == 0
+    assert "（フリーレン）" in out.target.read_text(encoding="utf-8")
+
+
+# ---------- 合成中日双语 ----------
+
+JA_SRT = """1
+00:00:01,000 --> 00:00:03,000
+そうだね
+
+2
+00:00:04,500 --> 00:00:06,000
+魔法は面白い
+
+3
+00:00:20,000 --> 00:00:21,000
+誰もいない
+"""
+
+ZH_SRT = """1
+00:00:00,900 --> 00:00:03,100
+是啊
+
+2
+00:00:04,400 --> 00:00:06,200
+魔法很有趣
+
+3
+00:00:19,800 --> 00:00:21,200
+一个人都没有
+"""
+
+
+def _episode(tmp_path, zh_name="Show S01E05.zh-Hans.srt", zh_text=ZH_SRT):
+    video = tmp_path / "Show S01E05.mkv"
+    video.write_bytes(b"")
+    if zh_name:
+        (tmp_path / zh_name).write_text(zh_text, encoding="utf-8")
+    return video
+
+
+def test_merge_pairs_lines_by_time_overlap(tmp_path):
+    video = _episode(tmp_path)
+    out, note = merge.merge_with_chinese(video, JA_SRT.encode("utf-8"), "x_ja.srt")
+    text = out.decode("utf-8")
+    assert "3/3" in note
+    # 日语在上、中文在下：先读日语，读不懂再往下看一眼
+    assert "そうだね\n是啊" in text
+    assert "魔法は面白い\n魔法很有趣" in text
+    # 时间轴以日语那份为准，不能被中文的时间盖掉
+    assert "00:00:01,000 --> 00:00:03,000" in text
+
+
+def test_merge_refuses_when_timelines_disagree(tmp_path):
+    """中文字幕来自别的片源时宁可不合并，也不要把台词错位贴上去。"""
+    video = _episode(tmp_path, zh_text=ZH_SRT.replace("00:00:", "00:05:"))
+    out, note = merge.merge_with_chinese(video, JA_SRT.encode("utf-8"), "x_ja.srt")
+    assert out is None and "对不上" in note
+
+
+def test_merge_ignores_our_own_japanese_subtitle(tmp_path):
+    """旁边那份 .ja.srt 是我们自己写的，不能被当成中文来源。"""
+    video = _episode(tmp_path, zh_name=None)
+    (tmp_path / "Show S01E05.ja.srt").write_text(JA_SRT, encoding="utf-8")
+    assert merge.find_chinese_subtitle(video) is None
+
+
+def test_merge_ignores_untagged_subtitle(tmp_path):
+    """没有语言标记的 Show S01E05.srt 不知道是什么语言，不猜。"""
+    video = _episode(tmp_path, zh_name=None)
+    (tmp_path / "Show S01E05.srt").write_text(ZH_SRT, encoding="utf-8")
+    assert merge.find_chinese_subtitle(video) is None
+
+
+def test_merge_prefers_simplified(tmp_path):
+    video = _episode(tmp_path, zh_name="Show S01E05.cht.srt")
+    (tmp_path / "Show S01E05.chs.srt").write_text(ZH_SRT, encoding="utf-8")
+    assert merge.find_chinese_subtitle(video).name == "Show S01E05.chs.srt"
+
+
+def test_merge_reads_ass_chinese(tmp_path):
+    ass = (
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 0,0:00:00.90,0:00:03.10,Default,,0,0,0,,{\\fad(100,100)}是啊\n"
+        "Dialogue: 0,0:00:04.40,0:00:06.20,Default,,0,0,0,,魔法\\N很有趣\n"
+        "Dialogue: 0,0:00:04.40,0:00:06.20,Sign,,0,0,0,,本字幕由某字幕组制作\n"
+    )
+    video = _episode(tmp_path, zh_name="Show S01E05.chs.ass", zh_text=ass)
+    out, note = merge.merge_with_chinese(video, JA_SRT.encode("utf-8"), "x_ja.srt")
+    text = out.decode("utf-8")
+    assert "そうだね\n是啊" in text                 # 特效标签被剥掉
+    assert "魔法は面白い\n魔法\n很有趣" in text      # \\N 还原成换行
+    assert "字幕组" not in text                     # Sign 样式不是台词，跳过
+
+
+def test_place_merges_with_chinese_neighbour(tmp_path):
+    video = _episode(tmp_path)
+    out = placer.place(str(video), "x_ja.srt", JA_SRT.encode("utf-8"), dry_run=False)
+    assert out.written and "中日双语" in out.merged
+    assert "是啊" in out.target.read_text(encoding="utf-8")
+
+
+def test_place_writes_pure_japanese_when_no_chinese(tmp_path):
+    video = _episode(tmp_path, zh_name=None)
+    out = placer.place(str(video), "x_ja.srt", JA_SRT.encode("utf-8"), dry_run=False)
+    assert out.written and out.merged == ""
+    assert out.target.read_text(encoding="utf-8").count("そうだね") == 1
+
+
+# ---------- 覆盖已有字幕（只有手动模式能触发） ----------
+
+def test_overwrite_replaces_old_subtitle_of_other_ext(tmp_path):
+    """旧的是 .ja.ass、新的是 .ja.srt，不删旧的就会剩两份，播放器挑哪份看不准。"""
+    video = _episode(tmp_path, zh_name=None)
+    old = tmp_path / "Show S01E05.ja.ass"
+    old.write_text("old", encoding="utf-8")
+    out = placer.place(str(video), "x_ja.srt", JA_SRT.encode("utf-8"),
+                       dry_run=False, overwrite=True)
+    assert out.written and out.replaced == "Show S01E05.ja.ass"
+    assert not old.exists()
+    assert out.target.name == "Show S01E05.ja.srt"
+
+
+def test_overwrite_dry_run_says_what_it_would_replace(tmp_path):
+    video = _episode(tmp_path, zh_name=None)
+    (tmp_path / "Show S01E05.ja.ass").write_text("old", encoding="utf-8")
+    out = placer.place(str(video), "x_ja.srt", None, dry_run=True, overwrite=True)
+    assert not out.written and "将覆盖 Show S01E05.ja.ass" in out.reason
+
+
+def test_scan_skips_existing_unless_overwrite(tmp_path):
+    """自动路径永远不传 overwrite，所以这条跳过逻辑必须是默认行为。"""
+    season = tmp_path / "Season 1"
+    season.mkdir()
+    (season / "Show - S01E05 - 第 5 集.mkv").write_bytes(b"")
+    (season / "Show - S01E05 - 第 5 集.ja.srt").write_text("old", encoding="utf-8")
+
+    rep_default = scan.scan(str(season), anilist_id=1, dry_run=True)
+    assert rep_default.episodes[0].status == "skipped_existing"
+
+    # 勾了覆盖就不该在这一步被拦下（后面查 Jimaku 会因为没 token 失败，这里只看没被跳过）
+    rep_force = scan.scan(str(season), anilist_id=1, dry_run=True, overwrite=True)
+    assert rep_force.episodes[0].status != "skipped_existing"
+
+
+def test_chinese_source_requires_an_external_file(tmp_path):
+    """旁边没有中文字幕就到此为止：不抽内嵌轨、不猜，照常写纯日语。"""
+    video = _episode(tmp_path, zh_name=None)
+    content, name, why = merge.chinese_source(video)
+    assert content is None and name == "" and "没有中文字幕" in why
+
+
+# ---------- 另存一份纯日语 ----------
+
+def test_keeps_pure_japanese_copy(tmp_path):
+    """合并后纯日语不能就此消失：另存一份，将来想切回去不用重下。"""
+    video = _episode(tmp_path)
+    out = placer.place(str(video), "x_ja.srt", JA_SRT.encode("utf-8"), dry_run=False)
+    raw = tmp_path / f"Show S01E05.{placer.RAW_TITLE}.ja.srt"
+    assert out.raw_target == raw.name and raw.exists()
+    text = raw.read_text(encoding="utf-8")
+    assert "そうだね" in text and "是啊" not in text        # 另存的那份是纯日语
+    assert "是啊" in out.target.read_text(encoding="utf-8")  # 主文件才是双语
+
+
+def test_raw_copy_is_not_mistaken_for_existing_or_chinese(tmp_path):
+    """另存的 <视频名>.原文.ja.srt 既不算"已有日语字幕"，也不能被当成中文来源。"""
+    video = _episode(tmp_path, zh_name=None)
+    (tmp_path / f"Show S01E05.{placer.RAW_TITLE}.ja.srt").write_text(JA_SRT, encoding="utf-8")
+    assert placer.existing_ja_subtitle(video) is None
+    assert merge.find_chinese_subtitle(video) is None
+
+
+def test_keep_japanese_only_can_be_turned_off(tmp_path):
+    settings.keep_japanese_only = False
+    video = _episode(tmp_path)
+    out = placer.place(str(video), "x_ja.srt", JA_SRT.encode("utf-8"), dry_run=False)
+    assert out.raw_target == ""
+    assert not (tmp_path / f"Show S01E05.{placer.RAW_TITLE}.ja.srt").exists()
 
 
 # ---------- 集号换算 ----------

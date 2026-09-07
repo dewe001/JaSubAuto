@@ -24,6 +24,10 @@ class Settings:
     # 字幕选择
     subtitle_lang_suffix: str = "ja"
     fansub_whitelist: str = ""          # 片源偏好，次要因素；主因素是语言纯度
+    subtitle_pref: str = "bilingual"    # bilingual=中日双语优先 / japanese=纯日语优先
+    strip_annotations: bool = True      # 写盘前去掉说话人标注与音效描述
+    merge_bilingual: bool = True        # 视频旁边有中文字幕时合成中日双语
+    keep_japanese_only: bool = True     # 合并成功时另存一份纯日语，见 placer.RAW_TITLE
 
     # 媒体库
     media_roots: str = ""               # 浏览媒体库的起点，逗号分隔
@@ -59,7 +63,7 @@ class Settings:
 
 settings = Settings()
 
-_BOOL_FIELDS = {"dry_run"}
+_BOOL_FIELDS = {"dry_run", "strip_annotations", "merge_bilingual", "keep_japanese_only"}
 _INT_FIELDS = {"anime_lists_refresh_days"}
 
 

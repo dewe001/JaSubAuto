@@ -12,11 +12,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import picker
+from . import cleaner, merge, picker
 from .settings import settings
 
 # 常见视频容器。用途是拦截"用户给的根本不是视频文件"这类输入，
 # 而不是精确识别格式，所以宁可多列几个
+# 另存的那份纯日语字幕的"标题段"：<视频名>.原文.ja.srt。
+# Jellyfin/Emby 解析外挂字幕是 <视频名>.<标题>.<语言><扩展名>，所以它仍会被识别成日语轨，
+# 只是在播放器的字幕菜单里显示为「原文」，和合并出来的双语轨并列可选。
+RAW_TITLE = "原文"
+
 VIDEO_EXTS = {
     ".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv", ".flv",
     ".ts", ".m2ts", ".mts", ".rmvb", ".rm", ".webm", ".mpg", ".mpeg", ".iso",
@@ -30,6 +35,10 @@ class PlaceResult:
     reason: str
     video: Path | None = None      # 实际匹配到的视频文件
     video_note: str = ""           # 怎么匹配到的，便于在界面上核对
+    stripped: int = 0              # 清洗掉的说话人/音效标注条数
+    raw_target: str = ""           # 另存的纯日语字幕文件名，没另存则为空
+    replaced: str = ""             # 覆盖掉的旧字幕文件名（手动模式才可能非空）
+    merged: str = ""               # 合并中文字幕的结果说明，没合并则为空
 
 
 def map_path(path: str) -> Path:
@@ -93,6 +102,13 @@ def resolve_video(video_path: str, library_episode: int | None = None) -> tuple[
     return p, ""
 
 
+def raw_target_path(video_path: str | Path, subtitle_name: str) -> Path:
+    """合并成双语时，另存的那份纯日语放哪。和正片字幕同目录、可被播放器单独选中。"""
+    video = Path(video_path) if isinstance(video_path, str) else video_path
+    ext = "." + subtitle_name.rsplit(".", 1)[-1].lower() if "." in subtitle_name else ".srt"
+    return video.with_name(f"{video.stem}.{RAW_TITLE}.{settings.subtitle_lang_suffix}{ext}")
+
+
 def target_path(video_path: str | Path, subtitle_name: str) -> Path:
     """算出字幕应该放在哪、叫什么。"""
     video = Path(video_path) if isinstance(video_path, str) else video_path
@@ -101,12 +117,14 @@ def target_path(video_path: str | Path, subtitle_name: str) -> Path:
 
 
 def place(video_path: str, subtitle_name: str, content: bytes | None,
-          dry_run: bool | None = None, library_episode: int | None = None) -> PlaceResult:
+          dry_run: bool | None = None, library_episode: int | None = None,
+          overwrite: bool = False) -> PlaceResult:
     """写入字幕文件。
 
-    三条安全阀（见 CLAUDE.md）：
+    安全阀（见 CLAUDE.md）：
       1. dry_run 默认取配置值，配置默认为 true
-      2. 绝不覆盖已存在的字幕文件
+      2. 默认不覆盖已存在的字幕。`overwrite=True` 只由手动模式传入——
+         人已经看着界面点了「覆盖」，自动路径永远走默认值
       3. 目标目录不存在就报错，不自作主张创建
       4. 解析不出唯一的视频文件就拒绝，不拿目录名/猜出来的名字凑合
     """
@@ -122,14 +140,59 @@ def place(video_path: str, subtitle_name: str, content: bytes | None,
     target = target_path(video, subtitle_name)
 
     existing = existing_ja_subtitle(video)
-    if existing:
-        return PlaceResult(target, False, f"已有日语字幕 {existing.name}，跳过（绝不覆盖）", video, note)
+    if existing and not overwrite:
+        return PlaceResult(target, False, f"已有日语字幕 {existing.name}，跳过（未勾选覆盖）", video, note)
     if dry_run:
-        return PlaceResult(target, False, "dry-run：仅打印，未写盘", video, note)
+        preview = "dry-run：仅打印，未写盘"
+        if existing:
+            preview += f"（将覆盖 {existing.name}）"
+        return PlaceResult(target, False, preview, video, note)
     if not video.exists():
         return PlaceResult(target, False, f"视频文件不存在，路径映射可能不对：{video}", video, note)
     if content is None:
         return PlaceResult(target, False, "没有字幕内容可写", video, note)
 
+    stripped = 0
+    if settings.strip_annotations:
+        content, stripped = cleaner.clean(content, subtitle_name)
+
+    merged_note, raw_name = "", ""
+    if settings.merge_bilingual:
+        bilingual, merged_note = merge.merge_with_chinese(
+            video, content, subtitle_name, settings.subtitle_lang_suffix)
+        if bilingual is not None:
+            # 纯日语那份另存一份留着：双语看久了想切回纯日语时不用重下
+            if settings.keep_japanese_only:
+                raw = raw_target_path(video, subtitle_name)
+                if overwrite or not raw.exists():
+                    try:
+                        raw.write_bytes(content)
+                        raw_name = raw.name
+                    except OSError as exc:          # 另存失败不能连累主文件
+                        merged_note += f"（纯日语另存失败：{exc}）"
+            content = bilingual
+            # 合并结果统一是 srt，目标文件名的扩展名要跟着变
+            subtitle_name = subtitle_name.rsplit(".", 1)[0] + ".srt"
+            target = target_path(video, subtitle_name)
+        else:
+            merged_note = ""
+
+    # 覆盖时旧字幕的扩展名可能和这次要写的不一样（.ja.ass -> .ja.srt），
+    # 不删掉就会剩下两份，播放器会挑一份显示，看起来像"没生效"
+    replaced = ""
+    if existing and overwrite:
+        replaced = existing.name
+        if existing.resolve() != target.resolve():
+            existing.unlink()
+
     target.write_bytes(content)
-    return PlaceResult(target, True, "已写入", video, note)
+    bits = ["已覆盖 " + replaced] if replaced else ["已写入"]
+    if stripped:
+        bits.append(f"去掉 {stripped} 处说话人/音效标注")
+    if merged_note:
+        bits.append(merged_note)
+    if raw_name:
+        bits.append(f"纯日语另存为 {raw_name}")
+    return PlaceResult(target, True, "，".join(bits), video, note,
+                       stripped=stripped, raw_target=raw_name,
+                       replaced=replaced, merged=merged_note)

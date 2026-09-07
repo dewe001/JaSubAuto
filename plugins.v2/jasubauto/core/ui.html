@@ -78,7 +78,7 @@
 
     <div class="row">
       <div style="flex:3"><label>番剧文件夹
-        <span class="q" title="递归扫描这个文件夹下的所有视频，逐集配日语字幕。已经有 .ja 字幕的集数会自动跳过，绝不覆盖。">?</span></label>
+        <span class="q" title="递归扫描这个文件夹下的所有视频，逐集配日语字幕。默认跳过已有 .ja 字幕的集数，勾了「覆盖已有」才会重下并替换。">?</span></label>
         <input type="text" id="scanDir" placeholder="/媒体/日番/葬送的芙莉莲 (2023)"></div>
       <div><label>TMDB ID
         <span class="q" title="推荐。用离线映射表把媒体库的季集号换算到 AniList 体系，能正确处理分季错位（媒体库 S01E37 = AniList 第二季第 9 集）。从剧集目录的 tvshow.nfo 自动读取。">?</span></label>
@@ -91,6 +91,8 @@
     <div style="margin:12px 0">
       <label style="display:inline"><input type="checkbox" id="scanDry" checked> 试运行
         <span class="q" title="只列出会下载哪些字幕、会写成什么文件名，不实际写盘。确认无误后点结果里的「确认写入」。">?</span></label>
+      <label style="display:inline; margin-left:14px"><input type="checkbox" id="scanOverwrite"> 覆盖已有
+        <span class="q" title="已经有日语字幕的集数也重新下载并替换掉。用来把之前下的纯日语换成中日双语。不勾则跳过。">?</span></label>
       <button style="margin-left:12px" onclick="runScan()">开始扫描</button>
     </div>
     <div id="scanOut"></div>
@@ -119,6 +121,9 @@
         <div style="flex:0 0 auto"><button onclick="loadCandidates()">查候选</button></div>
         <div style="flex:0 0 auto"><label style="display:inline">
           <input type="checkbox" id="dryRun" checked> 试运行</label></div>
+        <div style="flex:0 0 auto"><label style="display:inline">
+          <input type="checkbox" id="overwrite"> 覆盖已有
+          <span class="q" title="视频旁边已经有日语字幕时，直接替换掉它（旧文件扩展名不同也会一并删除，避免剩下两份）。">?</span></label></div>
       </div>
 
       <div id="entryInfo" style="margin-top:12px"></div>
@@ -149,6 +154,9 @@ function post(path, body){
 fetch(U('/health')).then(r=>r.json()).then(h=>{
   $('health').textContent = (h.jimaku_token_configured ? 'Jimaku 已配置' : '⚠ 未配置 Jimaku Token')
     + ' · .' + h.lang_suffix
+    + ' · ' + (h.subtitle_pref === 'japanese' ? '纯日语优先' : '中日双语优先')
+    + (h.strip_annotations ? ' · 去说话人标注' : '')
+    + (h.merge_bilingual ? ' · 合并中文字幕' : '')
     + (h.preferred_sources.length ? ' · 片源偏好 ' + h.preferred_sources.join('>') : '');
 });
 
@@ -241,7 +249,8 @@ async function runScan(force){
     alert('请填 TMDB ID 或 AniList ID'); return; }
   $('scanOut').innerHTML = '<div class="muted">扫描中…（Jimaku 限速 25 请求/分钟，请稍候）</div>';
   const d = await post('/scan', {dir, tmdb_id: $('scanTmdb').value,
-                                 anilist_id: $('scanAnilist').value, dry_run: dryRun});
+                                 anilist_id: $('scanAnilist').value, dry_run: dryRun,
+                                 overwrite: $('scanOverwrite').checked});
 
   if(d.note && !d.episodes.length){
     $('scanOut').innerHTML = `<div class="note">❌ ${esc(d.note)}</div>`; return; }
@@ -253,7 +262,8 @@ async function runScan(force){
   const pending = d.summary.dry_run || 0;
   const action = d.dry_run && pending
     ? `<div style="margin-top:10px"><button data-act="commit">确认写入这 ${pending} 集字幕</button>
-         <span class="muted" style="margin-left:10px">已有字幕的不会被覆盖</span></div>`
+         <span class="muted" style="margin-left:10px">${$('scanOverwrite').checked
+            ? '已有字幕会被替换' : '已有字幕的会跳过'}</span></div>`
     : (!d.dry_run && (d.summary.ok || 0)
         ? `<div class="muted" style="margin-top:8px">已写入 ${d.summary.ok} 集</div>` : '');
 
@@ -281,8 +291,8 @@ async function runScan(force){
         </div>
         ${e.picked ? `<div class="muted" style="margin-top:4px">选用 ${esc(e.picked)}</div>` : ''}
         ${e.target ? `<div class="muted" style="margin-top:2px">${d.dry_run?'将写入':'已写入'}
-           <code>${esc(basename(e.target))}</code></div>` : ''}
-        ${e.reason && !e.target ? `<div class="muted" style="margin-top:2px">${esc(e.reason)}</div>` : ''}
+           <code>${esc(basename(e.target))}</code>${e.replaced?` · 已替换 <code>${esc(e.replaced)}</code>`:''}</div>` : ''}
+        ${e.reason ? `<div class="muted" style="margin-top:2px">${esc(e.reason)}</div>` : ''}
       </div>${manual}</div>`;
     }).join('');
 }
@@ -317,8 +327,8 @@ async function loadCandidates(){
   $('cands').innerHTML = `<div class="muted" style="margin-bottom:8px">${esc(d.reason)}</div>` +
     d.candidates.map(c => {
       const best = d.chosen && d.chosen.name === c.name;
-      const cls = (c.lang==='ja'||c.lang==='unknown') ? 'ja'
-                : (c.lang==='ja_cc'||c.lang==='ja_zh') ? '' : 'mix';
+      const cls = (c.lang==='ja'||c.lang==='unknown'||c.lang==='ja_zh') ? 'ja'
+                : (c.lang==='ja_cc') ? '' : 'mix';
       return `<div class="cand ${best?'best':''}">
         <div class="body">
           <div class="name">${esc(c.name)}</div>
@@ -340,11 +350,12 @@ async function download(url, name){
   $('result').innerHTML = '<div class="muted">处理中…</div>';
   const d = await post('/download', {url, name, video_path: videoPath,
                                      library_episode: $('libEp').value,
-                                     dry_run: $('dryRun').checked});
+                                     dry_run: $('dryRun').checked,
+                                     overwrite: $('overwrite').checked});
   if(d.detail){ $('result').innerHTML = `<div class="note">❌ ${esc(d.detail)}</div>`; return; }
   if(!d.target){ $('result').innerHTML = `<div class="note">❌ ${esc(d.reason)}</div>`; return; }
   $('result').innerHTML = `<div class="note">
-    ${d.written ? '✅ 已写入' : 'ℹ️ ' + esc(d.reason)}
+    ${d.written ? '✅ ' + esc(d.reason) : 'ℹ️ ' + esc(d.reason)}
     <div style="margin-top:4px"><code>${esc(basename(d.target))}</code></div></div>`;
 }
 

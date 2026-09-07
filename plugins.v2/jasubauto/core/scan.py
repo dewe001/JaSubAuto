@@ -41,6 +41,7 @@ class EpisodeResult:
     lang: str = ""
     target: str = ""
     reason: str = ""
+    replaced: str = ""        # 覆盖掉的旧字幕文件名
 
 
 @dataclass
@@ -91,7 +92,8 @@ def find_videos(root: Path) -> list[Path]:
     )
 
 
-def process_one(tmdb_id, title: str, season, episode, video_path: str) -> dict:
+def process_one(tmdb_id, title: str, season, episode, video_path: str,
+                overwrite: bool = False) -> dict:
     """处理单个视频文件：识别 → 查 Jimaku → 选文件 → 落盘。
 
     自动模式（入库事件）和单集手动下载共用这一份，避免两条路径behavior 不一致。
@@ -101,9 +103,10 @@ def process_one(tmdb_id, title: str, season, episode, video_path: str) -> dict:
     if episode is None:
         return {**out, "status": "unparsed", "reason": "文件名里解析不出集号（可能是特典/剧场版），跳过"}
 
-    # 已有日语字幕就到此为止：放在识别之前，省掉一次 Jimaku 查询和一次下载
+    # 已有日语字幕就到此为止：放在识别之前，省掉一次 Jimaku 查询和一次下载。
+    # 勾了覆盖（只可能来自手动模式）就不跳过，照常走完流程再覆盖写入。
     video, _note = placer.resolve_video(video_path, episode)
-    if video is not None:
+    if video is not None and not overwrite:
         existing = placer.existing_ja_subtitle(video)
         if existing:
             return {**out, "status": "skipped_existing", "reason": f"已有日语字幕 {existing.name}，跳过"}
@@ -129,7 +132,8 @@ def process_one(tmdb_id, title: str, season, episode, video_path: str) -> dict:
 
     content = None if settings.dry_run else jimaku.download(chosen.url)
     # library_episode 传媒体库口径的集号（视频文件名里那个），不是换算到 AniList 之后的
-    outcome = placer.place(video_path, chosen.name, content, library_episode=episode)
+    outcome = placer.place(video_path, chosen.name, content, library_episode=episode,
+                           overwrite=overwrite)
     return {**out,
             "status": "ok" if outcome.written else "dry_run",
             "picked": chosen.name, "lang": chosen.lang_label,
@@ -142,8 +146,12 @@ def scan(
     anilist_id: int | None = None,
     dry_run: bool | None = None,
     max_episodes: int = 200,
+    overwrite: bool = False,
 ) -> ScanReport:
     """扫描一个番剧文件夹并补齐日语字幕。
+
+    `overwrite=True` 时已有日语字幕的集数照样重下并覆盖（手动模式专用，
+    用来把之前下的纯日语换成中日双语）。
 
     tmdb_id / anilist_id 二选一：
       * 给 tmdb_id：逐集走映射表换算，能正确处理分季错位（推荐）
@@ -183,7 +191,7 @@ def scan(
         r = EpisodeResult(video=str(video), season=season, library_episode=ep)
 
         existing = placer.existing_ja_subtitle(video)
-        if existing:
+        if existing and not overwrite:
             r.status, r.reason = "skipped_existing", f"已有日语字幕：{existing.name}"
             report.episodes.append(r)
             continue
@@ -237,9 +245,10 @@ def scan(
         r.picked, r.lang = chosen.name, chosen.lang_label
         try:
             content = None if dry_run else jimaku.download(chosen.url)
-            outcome = placer.place(str(Path(r.video)), chosen.name, content, dry_run=dry_run)
+            outcome = placer.place(str(Path(r.video)), chosen.name, content, dry_run=dry_run,
+                                   overwrite=overwrite)
             r.status = "ok" if outcome.written else ("dry_run" if dry_run else "error")
-            r.target, r.reason = str(outcome.target), outcome.reason
+            r.target, r.reason, r.replaced = str(outcome.target), outcome.reason, outcome.replaced
         except Exception as exc:
             r.status, r.reason = "error", f"下载/落盘失败：{exc}"
 
@@ -254,8 +263,9 @@ if __name__ == "__main__":                            # 命令行自测
     ap.add_argument("--tmdb-id", type=int)
     ap.add_argument("--anilist-id", type=int)
     ap.add_argument("--write", action="store_true", help="真正写盘（默认 dry-run）")
+    ap.add_argument("--overwrite", action="store_true", help="已有日语字幕也重下覆盖")
     a = ap.parse_args()
-    rep = scan(a.dir, a.tmdb_id, a.anilist_id, dry_run=not a.write)
+    rep = scan(a.dir, a.tmdb_id, a.anilist_id, dry_run=not a.write, overwrite=a.overwrite)
     print(f"{rep.root}  视频 {rep.total_videos} 个  dry_run={rep.dry_run}")
     if rep.note:
         print("  ! " + rep.note)
