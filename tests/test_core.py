@@ -16,22 +16,26 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "plugins.v2" / "jasubauto"))
 
-from core import cleaner, identify, library, merge, picker, placer, scan  # noqa: E402
+from core import bangumi, cleaner, identify, jimaku, library, merge, picker, placer, scan  # noqa: E402
 from core.settings import settings  # noqa: E402
 
 
 FIXTURE_MAPPING = Path(__file__).parent / "fixtures" / "anime-list-mini.json"
+FIXTURE_BANGUMI_MAP = Path(__file__).parent / "fixtures" / "bangumi-map-mini.json"
 
 
 @pytest.fixture(autouse=True)
-def _settings(tmp_path_factory):
+def _settings(tmp_path_factory, monkeypatch):
     # 用独立的临时目录，别放进用例自己的 tmp_path——
     # 媒体库搜索的用例会把 tmp_path 下的每个子目录都当成一部剧
     data_dir = tmp_path_factory.mktemp("mapping")
     shutil.copy(FIXTURE_MAPPING, data_dir / "anime-list-full.json")
+    shutil.copy(FIXTURE_BANGUMI_MAP, data_dir / "bangumi-map.json")
     settings.data_dir = data_dir
     settings.anime_lists_refresh_days = 36500
     identify._index = None                          # 索引是模块级缓存，每个用例都得清
+    identify._id_index = None
+    bangumi.reset_cache()
     settings.subtitle_lang_suffix = "ja"
     settings.fansub_whitelist = "Netflix,Amazon,SubsPlease,Moozzi2"
     settings.media_roots = ""
@@ -40,6 +44,10 @@ def _settings(tmp_path_factory):
     settings.strip_annotations = True
     settings.merge_bilingual = True
     settings.keep_japanese_only = True
+    # 单测不许联网：Bangumi API、Jimaku 标题搜索、AniList 开播年份一律换成假数据
+    monkeypatch.setattr(bangumi, "_api_get", _fake_bangumi_api)
+    monkeypatch.setattr(jimaku, "search_by_title", lambda q: list(JIMAKU_ENTRIES))
+    monkeypatch.setattr(identify, "anilist_start_year", lambda aid: ANILIST_YEARS.get(aid))
     yield
 
 
@@ -126,13 +134,92 @@ def test_pick_japanese_mode_demotes_bilingual():
     assert chosen.lang == "ja"
 
 
-def test_pick_refuses_when_tied():
-    """分不出唯一最优就交人工，绝不瞎选。"""
+# ---------- 同分候选按规则挑 ----------
+
+def _f(name, modified="2026-06-24", size=1):
+    return {"name": name, "url": name, "size": size, "last_modified": modified}
+
+
+def test_pick_same_release_in_two_formats_takes_srt():
+    """真实数据：芙莉莲第二季 10 集全卡在同一份字幕的 ass + srt 同分上。"""
     settings.fansub_whitelist = ""
-    files = [{"name": f"[G{i}] Show - 05.srt", "url": f"u{i}", "size": 1, "last_modified": "x"}
-             for i in range(3)]
-    cands, chosen, reason = picker.pick(files, 5)
-    assert len(cands) == 3 and chosen is None and "人工" in reason
+    files = [_f("[NanakoRaws] Sousou no Frieren S2 - 03 (NTV 1080p HEVC AAC).ass", size=88398),
+             _f("[NanakoRaws] Sousou no Frieren S2 - 03 (NTV 1080p HEVC AAC).srt", size=22400)]
+    _, chosen, reason = picker.pick(files, 3)
+    assert chosen.name.endswith(".srt") and ".srt" in reason
+
+
+KAMIINA = "Kamiina Botan, Yoeru Sugata wa Yuri no Hana"
+
+
+def _kamiina_files():
+    """真实数据的缩影：上伊那牡丹三个组都出了中日双语，12 集全部同分。KitaujiSub 缺第 12 集。"""
+    files = []
+    for ep in range(1, 13):
+        files.append(_f(f"[Haruhana] {KAMIINA} - {ep:02d} [WebRip][HEVC-10bit 1080p][CHS, JPN].ass", "2026-06-20"))
+        files.append(_f(f"[Haruhana] {KAMIINA} - {ep:02d} [WebRip][HEVC-10bit 1080p][JPN].ass", "2026-06-20"))
+        files.append(_f(f"[Nekomoe kissaten&LoliHouse] {KAMIINA} - {ep:02d} "
+                        f"[WebRip 1080p HEVC-10bit AAC ASSx2][CHS, JPN].ass", "2026-06-01"))
+        if ep < 12:
+            files.append(_f(f"[KitaujiSub] {KAMIINA} [{ep:02d}][WebRip][HEVC_AAC][CHS, JPN].ass", "2026-09-01"))
+    return files
+
+
+def test_pick_keeps_one_group_for_the_whole_series():
+    """同分时按组比而不是按单个文件比：否则第 1 集 A 组、第 2 集 B 组，字幕风格来回跳。
+    KitaujiSub 更新最晚但缺一集，Haruhana 与 Nekomoe 都齐，Haruhana 更新更晚。"""
+    settings.fansub_whitelist = ""
+    files = _kamiina_files()
+    picked = {picker.release_group(picker.pick(files, ep)[1].name) for ep in range(1, 13)}
+    assert picked == {"haruhana"}
+    _, _, reason = picker.pick(files, 1)
+    assert "Haruhana" in reason and "整部剧" in reason
+
+
+def test_pick_prefers_group_that_covers_more_episodes():
+    settings.fansub_whitelist = ""
+    files = [_f(f"[Old] Show - {e:02d} [CHS, JPN].ass", "2026-01-01") for e in range(1, 13)]
+    files += [_f(f"[New] Show - {e:02d} [CHS, JPN].ass", "2026-09-01") for e in range(1, 7)]
+    _, chosen, reason = picker.pick(files, 3)
+    assert chosen.name.startswith("[Old]") and "12 集" in reason
+
+
+def test_pick_follows_the_video_release_group():
+    """自动模式能拿到下载时的原始文件名，和视频同组的字幕时间轴最可能对得上。"""
+    settings.fansub_whitelist = ""
+    hint = f"[KitaujiSub] {KAMIINA} [05][WebRip][HEVC_AAC][CHS].mp4"
+    _, chosen, reason = picker.pick(_kamiina_files(), 5, hint=hint)
+    assert chosen.name.startswith("[KitaujiSub]") and "KitaujiSub" in reason
+
+
+def test_pick_tie_is_deterministic():
+    """什么都一样时也要选得出来，而且不随 Jimaku 返回顺序变。"""
+    settings.fansub_whitelist = ""
+    files = [_f(f"[G{i}] Show - 05.srt") for i in range(3)]
+    picks = {picker.pick(order, 5)[1].name for order in (files, files[::-1])}
+    assert picks == {"[G0] Show - 05.srt"}
+
+
+def test_release_group_is_stable_across_episodes():
+    assert picker.release_group("Kinomi Master - 01 「唯一の素材」 (MX 1920x1080 x264 AAC).srt") == \
+        picker.release_group("Kinomi Master - 02 「未完の輝き」 (MX 1920x1080 x264 AAC).ass")
+    assert picker.release_group(
+        "Kamiina.Botan.S01E03.720p.ABEMA.WEB-DL.JPN.AAC2.0.H.264-ToonsHub.ass") == "toonshub"
+
+
+@pytest.mark.parametrize("name, batch", [
+    # 真实数据：1-4 集合在一个文件里，曾被当成第 1 集的候选
+    ("[KitaujiSub] Sousou no Frieren - 01-04 TVSP [CHS, JPN].ass", True),
+    ("[Group] Show [01-12][1080p].ass", True),
+    ("Show Complete Batch.srt", True),
+    # 季名里的 Season 不是合集标记
+    ("Sousou no Frieren 2nd Season - 01.srt", False),
+    ("[NanakoRaws] Sousou no Frieren S2 - 03 (NTV 1080p HEVC AAC).srt", False),
+    # 日期不是集号范围
+    ("Show 2024-06-18 - 05.srt", False),
+])
+def test_is_batch(name, batch):
+    assert picker.is_batch(name) is batch
 
 
 # ---------- 清洗说话人标注 ----------
@@ -477,3 +564,168 @@ def test_search_does_not_leak_outside_configured_roots(tmp_path):
     settings.media_roots = str(tmp_path / "日番")
     assert library.find_shows("某下载")["entries"] == []
     assert len(library.find_shows("某番剧")["entries"]) == 1
+
+
+# ---------- Bangumi ID（Jellyfin 的 Bangumi 插件刮削的库） ----------
+# 数据取自 2026-09-12 的真实 API 返回，裁掉了用不到的字段
+
+def _eps(sorts):
+    return [{"id": 100000 + i, "type": 0, "sort": s, "ep": i + 1} for i, s in enumerate(sorts)]
+
+
+BGM_EPISODES = {
+    400602: _eps(range(1, 29)),        # 芙莉莲第一季：sort 与 ep 相同
+    515759: _eps(range(29, 39)),       # 芙莉莲第二季：sort 29~38，ep 1~10
+    369304: _eps(range(25, 48)),       # 咒术回战第二季：sort 25~47，ep 1~23
+    5000: _eps(range(10, 22)),         # 虚构：sort 10~21，和 ep 1~12 有重叠
+    6000: _eps(range(1, 13)),
+    777: _eps(range(1, 13)),
+}
+BGM_ROUTES = {
+    "/v0/subjects/400602": {"id": 400602, "name": "葬送のフリーレン", "date": "2023-09-29",
+                            "infobox": [{"key": "别名", "value": [{"v": "Sousou no Frieren"}]}]},
+    "/v0/subjects/515759": {"id": 515759, "name": "葬送のフリーレン 第2期", "date": "2026-01-16",
+                            "infobox": [{"key": "别名", "value": [
+                                {"v": "Sousou no Frieren 2nd Season"},
+                                {"v": "Frieren: Beyond Journey's End Season 2"}]}]},
+    "/v0/subjects/6000": {"id": 6000, "name": "葬送", "date": "2026-01-01", "infobox": []},
+    "/v0/subjects/400602/subjects": [{"id": 515759, "type": 2, "relation": "续集"},
+                                     {"id": 459283, "type": 2, "relation": "衍生"},
+                                     {"id": 477900, "type": 3, "relation": "原声集"}],
+    "/v0/subjects/515759/subjects": [{"id": 400602, "type": 2, "relation": "前传"}],
+    "/v0/episodes/9001": {"id": 9001, "type": 0, "sort": 36, "ep": 8, "subject_id": 515759},
+}
+# Jimaku 的标题搜索是模糊的：不管搜什么都把这几条全返回，考验全等比对
+JIMAKU_ENTRIES = [
+    {"id": 729, "name": "Sousou no Frieren", "japanese_name": "葬送のフリーレン",
+     "english_name": "Frieren: Beyond Journey’s End", "anilist_id": 154587, "flags": {"anime": True}},
+    {"id": 11446, "name": "Sousou no Frieren 2nd Season", "japanese_name": "葬送のフリーレン 第2期",
+     "english_name": "Frieren: Beyond Journey’s End Season 2", "anilist_id": 182255,
+     "flags": {"anime": True}},
+]
+ANILIST_YEARS = {154587: 2023, 182255: 2026}
+
+
+def _fake_bangumi_api(path, params=None):
+    if path == "/v0/episodes":
+        data = BGM_EPISODES.get(params["subject_id"])
+        if data is None:
+            return None
+        offset = params.get("offset", 0)
+        return {"data": data[offset:offset + params.get("limit", 100)], "total": len(data)}
+    return BGM_ROUTES.get(path)
+
+
+def _nfo(path: Path, body: str, root: str = "tvshow"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'<?xml version="1.0" encoding="utf-8"?><{root}>{body}</{root}>', encoding="utf-8")
+
+
+def test_nfo_supplies_bangumi_id_and_ignores_tvdb_in_id_tag(tmp_path):
+    """Jellyfin 写的 tvshow.nfo：<id> 是 TVDB ID，不能当成 tmdb；Bangumi 插件的 ID 在 <bangumiid>。"""
+    _make_library(tmp_path, ["葬送的芙莉莲 (2023)"])
+    _nfo(tmp_path / "葬送的芙莉莲 (2023)" / "tvshow.nfo",
+         "<title>葬送的芙莉莲</title><id>424536</id><tvdbid>424536</tvdbid><bangumiid>400602</bangumiid>")
+    settings.media_roots = str(tmp_path)
+    e = library.find_shows("芙莉莲")["entries"][0]
+    assert e["tmdb_id"] is None and e["bangumi_id"] == 400602 and e["note"] == ""
+
+
+def test_bangumi_ids_come_from_three_nfo_levels(tmp_path):
+    show = tmp_path / "葬送的芙莉莲"
+    video = show / "Season 2" / "葬送的芙莉莲 - S02E08 - 第 8 集.mkv"
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"")
+    _nfo(show / "tvshow.nfo", "<bangumiid>400602</bangumiid>")
+    _nfo(show / "Season 2" / "season.nfo", '<uniqueid type="Bangumi">515759</uniqueid>', root="season")
+    _nfo(video.with_suffix(".nfo"), "<bangumiid>9001</bangumiid>", root="episodedetails")
+    ids = library.bangumi_ids_for(video)
+    assert (ids.episode, ids.season, ids.show) == (9001, 515759, 400602)
+    assert library.bangumi_ids_for(video, show=1).show == 1        # 显式传入的优先于 nfo
+
+
+def test_locate_walks_to_sequel_for_continuous_numbering():
+    """TMDB 把芙莉莲第二季接着第一季排：S01E36 = 第二季第 8 集。"""
+    assert bangumi.locate(400602, 36)[:2] == (515759, 8)
+
+
+def test_locate_understands_bangumi_sort_numbering():
+    """咒术回战第二季的条目里，第 25 集就是本季第 1 集；第 5 集就是第 5 集。"""
+    assert bangumi.locate(369304, 25)[:2] == (369304, 1)
+    assert bangumi.locate(369304, 5)[:2] == (369304, 5)
+
+
+def test_locate_refuses_when_numbering_is_ambiguous():
+    sid, ep, why = bangumi.locate(5000, 10)
+    assert sid is None and "交人工" in why
+
+
+def test_resolve_bangumi_through_mapping_table():
+    r = identify.resolve(None, 1, 5, bangumi_ids=bangumi.BangumiIds(show=400602))
+    assert (r.anilist_id, r.episode, r.confident, r.source) == (154587, 5, True, "bangumi")
+
+
+def test_resolve_bangumi_by_exact_title_when_mapping_has_no_links():
+    """芙莉莲第二季在映射表里没有外链：靠罗马音别名与 Jimaku 条目名全等。"""
+    r = identify.resolve(None, 2, 3, bangumi_ids=bangumi.BangumiIds(season=515759))
+    assert (r.anilist_id, r.episode, r.confident) == (182255, 3, True)
+    assert "同名" in r.note
+
+
+def test_resolve_bangumi_continuous_numbering_end_to_end():
+    r = identify.resolve(None, 1, 36, bangumi_ids=bangumi.BangumiIds(show=400602))
+    assert (r.anilist_id, r.episode) == (182255, 8)
+
+
+def test_episode_nfo_is_used_only_if_its_number_matches():
+    ids = bangumi.BangumiIds(episode=9001, show=400602)
+    assert identify.resolve(None, 1, 36, bangumi_ids=ids).episode == 8
+    # 集 nfo 说的是第 36 集，视频却是第 5 集：nfo 过期了，不用它，改走剧级 ID
+    r = identify.resolve(None, 1, 5, bangumi_ids=ids)
+    assert (r.anilist_id, r.episode) == (154587, 5)
+
+
+def test_show_level_bangumi_id_does_not_cover_later_seasons():
+    """剧级 ID 等于第一季；第 2 季没有 season.nfo 时不能拿第一季的字幕去配。"""
+    r = identify.resolve(None, 2, 1, bangumi_ids=bangumi.BangumiIds(show=400602))
+    assert r.anilist_id is None and "season.nfo" in r.note
+
+
+def test_title_match_must_be_exact():
+    """「葬送」模糊搜得到芙莉莲，但名字不全等，不算。"""
+    r = identify.resolve(None, 1, 1, bangumi_ids=bangumi.BangumiIds(show=6000))
+    assert r.anilist_id is None and "没有同名条目" in r.note
+
+
+def test_title_match_checks_air_year(monkeypatch):
+    """重制版常常同名：开播年份对不上就不认。"""
+    monkeypatch.setattr(identify, "anilist_start_year", lambda aid: 2010)
+    r = identify.resolve(None, 2, 3, bangumi_ids=bangumi.BangumiIds(season=515759))
+    assert r.anilist_id is None and "年份" in r.note
+
+
+def test_conflicting_mapping_goes_to_manual():
+    """MAL 和 AniDB 指向两个不同的 AniList 条目：数据自相矛盾，不选。"""
+    r = identify.resolve(None, 1, 1, bangumi_ids=bangumi.BangumiIds(show=777))
+    assert r.anilist_id is None and "多个" in r.note
+
+
+def test_bangumi_api_down_degrades_quietly(monkeypatch):
+    monkeypatch.setattr(bangumi, "_api_get", lambda path, params=None: None)
+    r = identify.resolve(None, 1, 5, bangumi_ids=bangumi.BangumiIds(show=400602))
+    assert r.anilist_id is None and r.note
+
+
+def test_scan_reads_bangumi_id_from_nfo(tmp_path, monkeypatch):
+    """什么 ID 都不填：从 tvshow.nfo 读到 Bangumi ID，一路配上字幕。"""
+    show = tmp_path / "葬送的芙莉莲"
+    video = show / "Season 1" / "葬送的芙莉莲 - S01E05 - 第 5 集.mkv"
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"")
+    _nfo(show / "tvshow.nfo", "<bangumiid>400602</bangumiid>")
+    monkeypatch.setattr(jimaku, "search_entries", lambda aid: [{"id": 729}] if aid == 154587 else [])
+    monkeypatch.setattr(jimaku, "list_files",
+                        lambda eid: [_f("[SubsPlease] Sousou no Frieren - 05 (1080p) [ABC]_ja.srt")])
+    rep = scan.scan(str(show), dry_run=True)
+    ep = rep.episodes[0]
+    assert (ep.status, ep.anilist_id, ep.anilist_episode) == ("dry_run", 154587, 5), ep.reason

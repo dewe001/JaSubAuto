@@ -83,6 +83,9 @@
       <div><label>TMDB ID
         <span class="q" title="推荐。用离线映射表把媒体库的季集号换算到 AniList 体系，能正确处理分季错位（媒体库 S01E37 = AniList 第二季第 9 集）。从剧集目录的 tvshow.nfo 自动读取。">?</span></label>
         <input type="number" id="scanTmdb" placeholder="209867"></div>
+      <div><label>Bangumi ID
+        <span class="q" title="nfo 里没有 TMDB ID 时用（Jellyfin 的 Bangumi 插件刮削的库）。从 tvshow.nfo 自动读取；各季 season.nfo、各集 nfo 里有更具体的 ID 会自动用上。三个 ID 都不填时，扫描会自己读文件夹里的 tvshow.nfo。">?</span></label>
+        <input type="number" id="scanBgm" placeholder="400602"></div>
       <div><label>AniList ID
         <span class="q" title="备选。跳过识别，直接把文件名里的集号当作 AniList 集号。只在映射表查不到、且你确认两边编号一致时用。">?</span></label>
         <input type="number" id="scanAnilist" placeholder="154587"></div>
@@ -102,7 +105,7 @@
   <div class="card">
     <details id="manualBox">
       <summary>单集手动挑字幕
-        <span class="q" title="自动选不出唯一最优时（多个同分候选），扫描结果里那一集会标「待人工」，点它右边的「手动挑」就会填到这里。">?</span>
+        <span class="q" title="认不准是哪部剧、哪一集时，扫描结果里那一集会标「待人工」，点它右边的「手动挑」就会填到这里。同一集有多个版本时会按规则自动挑，不用手点。">?</span>
       </summary>
 
       <div class="row" style="margin-top:12px">
@@ -180,10 +183,11 @@ function render(where){
           (e.missing ? `<span class="tag mix">缺 ${e.missing} 集</span>`
                      : `<span class="tag ja">已齐</span>`)
         : (e.subdir_count ? `<span class="tag">${e.subdir_count} 个子文件夹</span>` : '');
-      const id = e.tmdb_id ? `<span class="tag ja">tmdb=${e.tmdb_id}</span>` : '';
+      const id = (e.tmdb_id ? `<span class="tag ja">tmdb=${e.tmdb_id}</span>` : '')
+               + (e.bangumi_id ? `<span class="tag ja">bgm=${e.bangumi_id}</span>` : '');
       // 路径一律走 data-* 属性 + 事件委托，不用内联 onclick：
       // 路径里可能有引号、括号、反斜杠，拼进 onclick 属性里迟早出事（已经出过一次）
-      const attrs = `data-path="${esc(e.path)}" data-tmdb="${e.tmdb_id || ''}"`;
+      const attrs = `data-path="${esc(e.path)}" data-tmdb="${e.tmdb_id || ''}" data-bgm="${e.bangumi_id || ''}"`;
       return `<div class="cand">
         <div class="body">
           <div class="name"><a href="#" data-act="dir" ${attrs}>${esc(e.name)}</a>${cn}</div>
@@ -220,9 +224,12 @@ async function browseDir(path){
 
 function browseUp(){ if(BROWSE_PARENT) browseDir(BROWSE_PARENT); }
 
-function useFolder(path, tmdbId){
+function useFolder(path, tmdbId, bgmId){
   $('scanDir').value = path;
-  if(tmdbId) $('scanTmdb').value = tmdbId;
+  // 换剧时 ID 一起重填：上一部剧留下的 ID 会让这一部配上别人的字幕
+  $('scanTmdb').value = tmdbId || '';
+  $('scanBgm').value = bgmId || '';
+  $('scanAnilist').value = '';
   $('scanDir').scrollIntoView({behavior:'smooth', block:'center'});
 }
 
@@ -245,10 +252,9 @@ async function runScan(force){
   const dryRun = force === undefined ? $('scanDry').checked : force;
   const dir = $('scanDir').value.trim();
   if(!dir){ alert('请先填写番剧文件夹'); return; }
-  if(!$('scanTmdb').value && !$('scanAnilist').value){
-    alert('请填 TMDB ID 或 AniList ID'); return; }
+  // ID 都不填也放行：后端会读文件夹里的 tvshow.nfo，读不到会在结果里说明
   $('scanOut').innerHTML = '<div class="muted">扫描中…（Jimaku 限速 25 请求/分钟，请稍候）</div>';
-  const d = await post('/scan', {dir, tmdb_id: $('scanTmdb').value,
+  const d = await post('/scan', {dir, tmdb_id: $('scanTmdb').value, bangumi_id: $('scanBgm').value,
                                  anilist_id: $('scanAnilist').value, dry_run: dryRun,
                                  overwrite: $('scanOverwrite').checked});
 
@@ -369,8 +375,8 @@ document.addEventListener('click', ev => {
   const act = el.dataset.act;
   if(act === 'dir') browseDir(el.getAttribute('data-path'));
   else if(act === 'pick'){
-    const t = el.getAttribute('data-tmdb');
-    useFolder(el.getAttribute('data-path'), t ? Number(t) : null);
+    const t = el.getAttribute('data-tmdb'), b = el.getAttribute('data-bgm');
+    useFolder(el.getAttribute('data-path'), t ? Number(t) : null, b ? Number(b) : null);
   }
   else if(act === 'dl') download(el.getAttribute('data-url'), el.getAttribute('data-name'));
   else if(act === 'commit') runScan(false);

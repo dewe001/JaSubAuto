@@ -4,7 +4,8 @@
     Sousou no Frieren - 01 「冒険の終わり」 (AT-X 1280x720 x264 AAC).srt
     Sousou no Frieren - 18 「一級魔法使い選抜試験」 (NTV 1920x1080 x264 AAC).ass
     Sousou no Frieren - 18 「一級魔法使い選抜試験」 (NTV 1920x1080 x264 AAC).srt
-原则：宁可判定"不确定"交给人工，也不要瞎选（见 CLAUDE.md 硬性约束）。
+原则（见 CLAUDE.md 硬性约束）：认不准是哪一集就不选；确定是这一集、只是版本不同，
+就按固定规则选，不交人工——同分交人工曾让整季 12 集挨个手点。
 """
 
 from __future__ import annotations
@@ -17,8 +18,19 @@ from .settings import settings
 SUBTITLE_EXTS = {".srt", ".ass", ".ssa", ".vtt", ".sub"}
 ARCHIVE_EXTS = {".zip", ".7z", ".rar"}
 
-# 合集/整季包的特征词，这类不做自动匹配
-BATCH_KEYWORDS = ("batch", "complete", "全集", "全話", "season", "s01-", "1-12", "1-24")
+# 合集/整季包的特征词，这类不做自动匹配。
+# 不能放 "season"：「Show 2nd Season - 01.srt」是单集，放了会被当成合集丢掉
+BATCH_KEYWORDS = ("batch", "complete", "全集", "全話", "s01-")
+# 集号范围「- 01-04 TVSP」「[01-12]」：两个数紧贴连字符，后一个大于前一个。
+# 前面不许是连字符或数字，避免把日期 2024-06-18 里的「06-18」认成范围
+_RANGE = re.compile(r"(?<![\d.\-])(\d{1,3})[-~～](\d{1,3})(?!\d)")
+
+# 同一份字幕常同时发 ass 和 srt，内容一样只是格式不同，按这个顺序取。
+# srt 排第一：所有播放端都能直接显示；ass 遇到不支持的客户端会让 Jellyfin 转码烧录，白占 NAS 性能
+FORMAT_ORDER = (".srt", ".ass", ".ssa", ".vtt", ".sub")
+
+_GROUP_BRACKET = re.compile(r"^\s*\[([^\]]+)\]")          # [Nekomoe kissaten&LoliHouse] Show - 01 ...
+_GROUP_SCENE = re.compile(r"-([A-Za-z][A-Za-z0-9]*)$")    # Show.S01E01.720p.WEB-DL.H.264-ToonsHub
 
 # 匹配集号前先剔除的噪音：分辨率、编码、音频、年份、位深
 _NOISE = re.compile(
@@ -145,7 +157,65 @@ def parse_episode(filename: str) -> int | None:
 
 def is_batch(filename: str) -> bool:
     low = filename.lower()
-    return any(k in low for k in BATCH_KEYWORDS)
+    if any(k in low for k in BATCH_KEYWORDS):
+        return True
+    # 分辨率、年份这类数字先剔掉，再找集号范围
+    return any(int(b) > int(a) for a, b in _RANGE.findall(_NOISE.sub(" ", filename)))
+
+
+def _ext(name: str) -> str:
+    return "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
+
+
+def _stem(name: str) -> str:
+    return name.rsplit(".", 1)[0] if "." in name else name
+
+
+def _usable(name: str) -> bool:
+    """能拿来逐集自动匹配的字幕文件：是字幕、不是压缩包、不是合集。"""
+    ext = _ext(name)
+    if ext in ARCHIVE_EXTS:
+        return False  # 压缩包需要解压再分发，自动化价值低，跳过
+    if ext and ext not in SUBTITLE_EXTS:
+        return False
+    return not is_batch(name)
+
+
+def _format_rank(name: str) -> int:
+    ext = _ext(name)
+    return FORMAT_ORDER.index(ext) if ext in FORMAT_ORDER else len(FORMAT_ORDER)
+
+
+def named_group(name: str) -> str:
+    """文件名里写明的发布组：开头的 [组名]，或 scene 命名末尾的 -组名。没写返回空串。"""
+    stem = _stem(name)
+    m = _GROUP_BRACKET.match(stem)
+    if m:
+        return m.group(1).strip()
+    m = _GROUP_SCENE.search(stem)
+    if m and m.group(1).lower() not in _JA_TOKENS | _EN_TOKENS | _ZH_TOKENS:
+        return m.group(1)
+    return ""
+
+
+def release_group(name: str) -> str:
+    """这个文件属于哪条发布线（小写）。同一条线的各集返回同一个值。
+
+    没写组名的，去掉分集标题和所有数字后剩下的部分就是它的"线"：
+    「Kinomi Master - 01 「唯一の素材」 (MX 1920x1080 x264 AAC)」各集归到同一个键。
+    """
+    group = named_group(name)
+    if group:
+        return group.lower()
+    rest = re.sub(r"「[^」]*」|\d+", " ", _stem(name).lower())
+    return " ".join(t for t in re.split(r"[^a-z぀-ヿ一-鿿]+", rest) if t)
+
+
+def _group_in(group: str, hint: str) -> bool:
+    """发布组是否出现在视频文件名里。按整词比，避免 "web" 命中 "WebRip"。
+    合作组「Nekomoe kissaten&LoliHouse」拆开后任何一个组对上就算。"""
+    parts = {p.strip() for p in re.split(r"[&+,/]", group.lower()) if len(p.strip()) >= 3}
+    return any(re.search(r"(?<![a-z0-9])" + re.escape(p) + r"(?![a-z0-9])", hint) for p in parts)
 
 
 def _score(name: str, lang: str, lang_label: str) -> tuple[int, list[str]]:
@@ -167,21 +237,82 @@ def _score(name: str, lang: str, lang_label: str) -> tuple[int, list[str]]:
     return score, reasons
 
 
-def pick(files: list[dict], episode: int) -> tuple[list[Candidate], Candidate | None, str]:
+def _group_stats(files: list[dict], lang: str) -> dict[str, tuple[int, str]]:
+    """同一语言档里，每条发布线覆盖了几集、最近一次更新是什么时候。"""
+    episodes: dict[str, set[int]] = {}
+    latest: dict[str, str] = {}
+    for f in files:
+        name = f.get("name", "")
+        if not _usable(name) or classify_language(name)[0] != lang:
+            continue
+        ep = parse_episode(name)
+        if ep is None:
+            continue
+        group = release_group(name)
+        episodes.setdefault(group, set()).add(ep)
+        latest[group] = max(latest.get(group, ""), f.get("last_modified") or "")
+    return {g: (len(eps), latest[g]) for g, eps in episodes.items()}
+
+
+def _break_tie(tied: list[Candidate], files: list[dict], hint: str) -> tuple[Candidate, str]:
+    """同分候选里挑一个，返回 (选中的, 按哪条规则选的)。
+
+    它们都是这一集、同一语言档的字幕，挑哪个都不算下错。要紧的是**整部剧各集挑到同一个组**，
+    否则字幕风格一集一变——所以除了第一步，规则都按组算（覆盖集数、组内最近更新），
+    这些指标每一集算出来都一样，各集自然落在同一组。
+    """
+    # 1. 同一份字幕的不同格式只留一个
+    by_release: dict[str, Candidate] = {}
+    for c in tied:
+        key = _stem(c.name).lower()
+        if key not in by_release or _format_rank(c.name) < _format_rank(by_release[key].name):
+            by_release[key] = c
+    pool = list(by_release.values())
+    if len(pool) == 1:
+        return pool[0], f"是同一份字幕的不同格式，取 {_ext(pool[0].name)}"
+
+    # 2. 和视频出自同一个发布组的，时间轴最可能对得上
+    hint = (hint or "").lower()
+    if hint:
+        same = [c for c in pool if named_group(c.name) and _group_in(named_group(c.name), hint)]
+        if len(same) == 1:
+            return same[0], f"与视频同为「{named_group(same[0].name)}」发布"
+        if same:
+            pool = same
+
+    # 3~5. 按组比：覆盖集数多 → 组内最近更新 → 组名排序
+    stats = _group_stats(files, pool[0].lang)
+    pool.sort(key=lambda c: (release_group(c.name), _format_rank(c.name), c.name))
+    pool.sort(key=lambda c: stats.get(release_group(c.name), (0, "")), reverse=True)
+    chosen = pool[0]
+    group = release_group(chosen.name)
+    label = named_group(chosen.name) or group
+    rival = next((c for c in pool[1:] if release_group(c.name) != group), None)
+    if rival is None:
+        return chosen, f"都出自「{label}」，按格式和文件名取第一个"
+
+    eps, latest = stats.get(group, (0, ""))
+    rival_eps, rival_latest = stats.get(release_group(rival.name), (0, ""))
+    if eps > rival_eps:
+        how = f"「{label}」覆盖 {eps} 集，比其它组多"
+    elif latest > rival_latest:
+        how = f"各组都有 {eps} 集，取最近更新的「{label}」（{latest[:10]}）"
+    else:
+        how = f"各组集数和更新时间都相同，按组名取「{label}」"
+    return chosen, how + "，整部剧都用这一组"
+
+
+def pick(files: list[dict], episode: int, hint: str = "") -> tuple[list[Candidate], Candidate | None, str]:
     """筛选并排序候选。
 
-    返回 (候选列表, 自动选中的那个或 None, 说明)。
-    自动选中为 None 时表示不确定，必须走人工。
+    返回 (候选列表, 选中的那个或 None, 说明)。只有一个候选都没有时才返回 None。
+    同分不交人工，由 `_break_tie` 按规则挑。`hint` 是视频文件名（自动模式还会带上
+    下载时的原始文件名），用来找同一个发布组的字幕。
     """
     candidates: list[Candidate] = []
     for f in files:
         name = f.get("name", "")
-        ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
-        if ext in ARCHIVE_EXTS:
-            continue  # 压缩包需要解压再分发，自动化价值低，跳过
-        if ext and ext not in SUBTITLE_EXTS:
-            continue
-        if is_batch(name):
+        if not _usable(name):
             continue
         ep = parse_episode(name)
         if ep != episode:
@@ -207,17 +338,14 @@ def pick(files: list[dict], episode: int) -> tuple[list[Candidate], Candidate | 
 
     # 排序：偏好分 > 修改时间新 > 体积大
     candidates.sort(key=lambda c: (c.score, c.last_modified, c.size), reverse=True)
+    top = candidates[0]
+    tied = [c for c in candidates if c.score == top.score]
+    if len(tied) == 1:
+        if len(candidates) == 1:
+            return candidates, top, "唯一匹配，可自动下载"
+        return candidates, top, f"评分区分出唯一最优（{top.score} > {candidates[1].score}，{top.lang_label}）"
 
-    if len(candidates) == 1:
-        return candidates, candidates[0], "唯一匹配，可自动下载"
-
-    top, second = candidates[0], candidates[1]
-    if top.score > second.score:
-        return candidates, top, f"评分区分出唯一最优（{top.score} > {second.score}，{top.lang_label}）"
-
-    return (
-        candidates,
-        None,
-        f"有 {len(candidates)} 个同分候选（均为{top.lang_label}），无法自动判定，需人工选择"
-        f"（在插件配置的「片源偏好」里加上想要的来源即可自动区分）",
-    )
+    chosen, how = _break_tie(tied, files, hint)
+    # 选中的排最前，和页面上的「推荐」一致
+    candidates = [chosen] + [c for c in candidates if c is not chosen]
+    return candidates, chosen, f"{len(tied)} 个候选同为{top.lang_label}：{how}"
