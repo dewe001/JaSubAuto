@@ -60,6 +60,10 @@ class Settings:
     def anime_lists_file(self) -> Path:
         return Path(self.data_dir) / "anime-list-full.json"
 
+    @property
+    def bangumi_map_file(self) -> Path:
+        return Path(self.data_dir) / "bangumi-map.json"
+
 
 settings = Settings()
 

@@ -52,12 +52,12 @@ function makeDom() {
 const SHOWS = [
   // 故意带单引号和括号：真实剧名就长这样（Frieren: Beyond Journey's End）
   { name: "葬送的芙莉莲 (2023)", path: "/媒体/日番/葬送的芙莉莲 (2023)",
-    title: "葬送的芙莉莲", year: "2023", tmdb_id: 209867,
+    title: "葬送的芙莉莲", year: "2023", tmdb_id: 209867, bangumi_id: 400602,
     video_count: 4, ja_count: 1, missing: 3, subdir_count: 1, note: "" },
   { name: "Frieren's Journey (2024)", path: "/媒体/日番/Frieren's Journey (2024)",
-    title: "", year: "", tmdb_id: null,
+    title: "", year: "", tmdb_id: null, bangumi_id: null,
     video_count: 0, ja_count: 0, missing: 0, subdir_count: 1,
-    note: "没找到 nfo，tmdb_id 需要手动填" },
+    note: "nfo 里没有 TMDB / Bangumi ID，需要手动填" },
 ];
 
 const CALLS = [];      // 记录每次请求，用来断言"确认写入"真的发了 dry_run=false
@@ -159,6 +159,7 @@ test("输入关键字后列出候选，且每行都有「选它」按钮", async
   assert.match(out, /葬送的芙莉莲/);
   assert.equal((out.match(/data-act="pick"/g) || []).length, 1, "应有且仅有 1 个「选它」按钮");
   assert.match(out, /tmdb=209867/);
+  assert.match(out, /bgm=400602/);
   assert.match(out, /缺 3 集/);
 });
 
@@ -178,18 +179,22 @@ test("没有 tmdb_id 的剧同样可选（不能因为缺统计/缺 id 就藏按
   const out = doc.getElementById("browseOut").innerHTML;
   assert.match(out, /data-act="pick"/);
   assert.match(out, /data-tmdb=""/, "没有 tmdb_id 时应是空串而不是漏掉按钮");
+  assert.match(out, /data-bgm=""/);
 });
 
 test("点「选它」把路径填进批量补扫的输入框", async () => {
   const el = {
     dataset: { act: "pick" },
     getAttribute: k => ({ "data-path": "/媒体/日番/葬送的芙莉莲 (2023)",
-                          "data-tmdb": "209867" }[k]),
+                          "data-tmdb": "209867", "data-bgm": "400602" }[k]),
     closest: () => el,
   };
+  doc.getElementById("scanAnilist").value = "999";       // 上一部剧留下的
   listeners.click.forEach(fn => fn({ target: el, preventDefault() {} }));
   assert.equal(doc.getElementById("scanDir").value, "/媒体/日番/葬送的芙莉莲 (2023)");
   assert.equal(doc.getElementById("scanTmdb").value, 209867);
+  assert.equal(doc.getElementById("scanBgm").value, 400602);
+  assert.equal(doc.getElementById("scanAnilist").value, "", "换剧时要清掉上一部剧的 AniList ID");
 });
 
 test("试运行结果里显示将写入的字幕文件名，且只取文件名不带路径", async () => {
@@ -197,6 +202,8 @@ test("试运行结果里显示将写入的字幕文件名，且只取文件名�
   doc.getElementById("scanTmdb").value = "209867";
   doc.getElementById("scanDry").checked = true;
   await runScanFromPage();
+  const sent = CALLS.filter(c => c.path.endsWith("/scan")).pop().sent;
+  assert.equal(sent.bangumi_id, 400602, "扫描请求要带上 Bangumi ID");
   const out = doc.getElementById("scanOut").innerHTML;
   assert.match(out, /将写入/);
   assert.match(out, /葬送的芙莉莲 - S01E36 - 第 36 集\.ja\.srt/);

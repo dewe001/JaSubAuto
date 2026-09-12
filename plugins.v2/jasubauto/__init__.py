@@ -20,7 +20,7 @@ from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.types import EventType
 
-from .core import identify, jimaku, library, picker, placer, scan as scanner
+from .core import bangumi, identify, jimaku, library, picker, placer, scan as scanner
 from .core.settings import configure, settings as core_settings
 
 UI_HTML = Path(__file__).parent / "core" / "ui.html"
@@ -85,6 +85,18 @@ def _tmdb_id(mediainfo):
         return None
 
 
+def _bangumi_id(mediainfo):
+    """MoviePilot 用 Bangumi 识别时 `source='bangumi'`、`media_id` 是条目 ID、`tmdb_id` 为空
+    （见 MoviePilot 的 MediaInfo.set_bangumi_info）。Bangumi 条目按季划分，所以它对应这一季。"""
+    raw = _attr(mediainfo, "bangumi_id")
+    if raw in (None, "") and str(_attr(mediainfo, "source") or "").lower() == "bangumi":
+        raw = _attr(mediainfo, "media_id")
+    try:
+        return int(str(raw)) if raw not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _path_of(item):
     """把 fileitem / 路径字符串统一成路径字符串。"""
     if item is None:
@@ -118,7 +130,7 @@ class JaSubAuto(_PluginBase):
     plugin_name = "日语字幕补全（Jimaku）"
     plugin_desc = "入库后自动从 jimaku.cc 补日语字幕，并提供手动挑选/整部剧批量补扫的网页"
     plugin_icon = "jasubauto.png"          # 解析到本仓库的 icons/ 下
-    plugin_version = "0.7.0"
+    plugin_version = "0.7.1"
     plugin_author = "dewe001"
     author_url = "https://github.com/dewe001"
     plugin_config_prefix = "jasubauto_"
@@ -237,9 +249,10 @@ class JaSubAuto(_PluginBase):
                              "episodes": h.get("episodes"), "year": h.get("seasonYear"),
                              "format": h.get("format")} for h in hits]}
 
-    def api_resolve(self, tmdb_id: int = None, season: int = 1,
-                    episode: int = 1, title: str = "") -> dict:
-        return vars(identify.resolve(tmdb_id, season, episode, title))
+    def api_resolve(self, tmdb_id: int = None, season: int = 1, episode: int = 1,
+                    title: str = "", bangumi_id: int = None) -> dict:
+        return vars(identify.resolve(tmdb_id, season, episode, title,
+                                     bangumi_ids=bangumi.BangumiIds(show=bangumi_id)))
 
     def api_candidates(self, anilist_id: int, episode: int) -> dict:
         entries = jimaku.search_entries(anilist_id)
@@ -290,6 +303,7 @@ class JaSubAuto(_PluginBase):
             anilist_id=int(payload["anilist_id"]) if payload.get("anilist_id") else None,
             dry_run=None if payload.get("dry_run") is None else bool(payload["dry_run"]),
             overwrite=bool(payload.get("overwrite")),
+            bangumi_id=int(payload["bangumi_id"]) if payload.get("bangumi_id") else None,
         )
         return {"root": rep.root, "dry_run": rep.dry_run, "total_videos": rep.total_videos,
                 "note": rep.note, "summary": rep.summary,
@@ -418,7 +432,9 @@ class JaSubAuto(_PluginBase):
         logger.info("【日语字幕】mediainfo: tmdb_id=%r media_id=%r type=%r title=%r"
                     % (_attr(mi, "tmdb_id"), _attr(mi, "media_id"),
                        _attr(mi, "type"), _attr(mi, "title")))
-        logger.info("【日语字幕】→ 解析出的 tmdb_id = %r" % _tmdb_id(mi))
+        logger.info("【日语字幕】mediainfo: source=%r bangumi_id=%r"
+                    % (_attr(mi, "source"), _attr(mi, "bangumi_id")))
+        logger.info("【日语字幕】→ 解析出的 tmdb_id = %r，bangumi_id = %r" % (_tmdb_id(mi), _bangumi_id(mi)))
 
         meta = data.get("meta")
         logger.info("【日语字幕】meta: begin_season=%r begin_episode=%r end_episode=%r"
@@ -446,6 +462,7 @@ class JaSubAuto(_PluginBase):
         try:
             mediainfo, transferinfo = data.get("mediainfo"), data.get("transferinfo")
             tmdb_id = _tmdb_id(mediainfo)
+            bangumi_id = _bangumi_id(mediainfo)
             title = _attr(mediainfo, "title") or _attr(mediainfo, "org_string") or ""
             files = _target_files(transferinfo)
             if not files:
@@ -457,10 +474,17 @@ class JaSubAuto(_PluginBase):
                 logger.info("【日语字幕】tmdb_id=%s 不在白名单内，跳过" % tmdb_id)
                 return
 
+            # 下载时的原始文件名：入库会重命名，发布组只在这里还看得到，picker 用它挑同组字幕
+            raw = _attr(transferinfo, "file_list") or []
+            sources = [_path_of(v) for v in (raw if isinstance(raw, (list, tuple)) else [raw])]
+            sources.append(_path_of(_attr(transferinfo, "fileitem")))
+            source_name = " ".join(Path(s).name for s in sources if s)
+
             for path in files:
                 p = Path(path)
                 season, episode = scanner.parse_video(p)
-                result = scanner.process_one(tmdb_id, title, season, episode, path)
+                result = scanner.process_one(tmdb_id, title, season, episode, path,
+                                             source_name=source_name, bangumi_id=bangumi_id)
                 logger.info("【日语字幕】%s → %s：%s"
                             % (p.name, result.get("status"), result.get("reason", "")))
         except Exception as exc:

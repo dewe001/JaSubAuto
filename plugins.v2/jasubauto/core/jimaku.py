@@ -79,6 +79,12 @@ def search_entries(anilist_id: int) -> list[dict]:
     return _get("/entries/search", anilist_id=anilist_id)
 
 
+def search_by_title(query: str) -> list[dict]:
+    """按标题查条目。**是模糊搜索**：「Dungeon Meshi」会带出三部「ダンジョンに出会い…」，
+    调用方必须自己拿 name / japanese_name 做全等比对，不能取第一条。"""
+    return _get("/entries/search", query=query)
+
+
 def list_files(entry_id: int) -> list[dict]:
     """列出某条目下的全部字幕文件。"""
     return _get(f"/entries/{entry_id}/files")

@@ -1,7 +1,7 @@
 """批量补扫：给一个番剧文件夹，为里面缺日语字幕的每一集补上。
 
 典型用法（手动模式的主力场景）：
-    输入 /媒体/动漫/番剧A + 该剧的 tmdb_id
+    输入 /媒体/动漫/番剧A + 该剧的 tmdb_id（或 Bangumi ID；都不填就读 tvshow.nfo）
     → 递归找出所有视频文件，逐个解析季/集号
     → 已经有 .ja.* 字幕的直接跳过
     → 其余的走「识别 → 查 Jimaku → 选文件 → 落盘」，字幕名与视频同名
@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import identify, jimaku, picker, placer
+from . import bangumi, identify, jimaku, library, picker, placer
 from .settings import settings
 
 # 从视频文件名里直接取季+集，媒体库经 MoviePilot 整理后基本都是这个格式
@@ -93,11 +93,15 @@ def find_videos(root: Path) -> list[Path]:
 
 
 def process_one(tmdb_id, title: str, season, episode, video_path: str,
-                overwrite: bool = False) -> dict:
+                overwrite: bool = False, source_name: str = "", bangumi_id=None) -> dict:
     """处理单个视频文件：识别 → 查 Jimaku → 选文件 → 落盘。
 
     自动模式（入库事件）和单集手动下载共用这一份，避免两条路径behavior 不一致。
-    任何一步不确定都返回 needs_review 而不是硬选（见 CLAUDE.md 硬性约束）。
+    认不准是哪部剧、哪一集就返回 needs_review 而不是硬选（见 CLAUDE.md 硬性约束）；
+    同一集的多个版本由 picker 按规则挑。`source_name` 是下载时的原始文件名——
+    入库重命名后发布组只在它里面还看得到，picker 用它优先挑同组字幕。
+    `bangumi_id` 是 MoviePilot 用 Bangumi 识别时给出的条目，对应这一季；
+    没有 tmdb 时还会读视频旁边 nfo 里的 Bangumi ID。
     """
     out = {"video": video_path, "season": season, "episode": episode}
     if episode is None:
@@ -111,7 +115,11 @@ def process_one(tmdb_id, title: str, season, episode, video_path: str,
         if existing:
             return {**out, "status": "skipped_existing", "reason": f"已有日语字幕 {existing.name}，跳过"}
 
-    result = identify.resolve(tmdb_id, season if season is not None else 1, episode, title)
+    # 读几个小 nfo 文件不费事；Bangumi ID 只在 tmdb 查不到时才会用上
+    ids = (library.bangumi_ids_for(video, season=bangumi_id) if video is not None
+           else bangumi.BangumiIds(season=bangumi_id))
+    result = identify.resolve(tmdb_id, season if season is not None else 1, episode, title,
+                              bangumi_ids=ids)
     if not result.anilist_id:
         return {**out, "status": "unidentified", "reason": result.note}
     out["anilist_id"] = result.anilist_id
@@ -125,7 +133,8 @@ def process_one(tmdb_id, title: str, season, episode, video_path: str,
                 "reason": f"Jimaku 无 anilist_id={result.anilist_id} 的条目"}
 
     files = jimaku.list_files(entries[0]["id"])
-    cands, chosen, reason = picker.pick(files, result.episode)
+    cands, chosen, reason = picker.pick(files, result.episode,
+                                        hint=f"{source_name} {Path(video_path).name}")
     if not chosen:
         return {**out, "status": "needs_review" if cands else "not_found",
                 "reason": reason, "candidate_count": len(cands)}
@@ -147,14 +156,17 @@ def scan(
     dry_run: bool | None = None,
     max_episodes: int = 200,
     overwrite: bool = False,
+    bangumi_id: int | None = None,
 ) -> ScanReport:
     """扫描一个番剧文件夹并补齐日语字幕。
 
     `overwrite=True` 时已有日语字幕的集数照样重下并覆盖（手动模式专用，
     用来把之前下的纯日语换成中日双语）。
 
-    tmdb_id / anilist_id 二选一：
+    tmdb_id / bangumi_id / anilist_id 至少一个，都不给就读文件夹里的 tvshow.nfo：
       * 给 tmdb_id：逐集走映射表换算，能正确处理分季错位（推荐）
+      * 给 bangumi_id：nfo 里只有 Bangumi ID 的剧。各季 season.nfo、各集 nfo 里
+        有更具体的 ID 会自动用上；tmdb_id 查不到时也会接着试 nfo 里的 Bangumi ID
       * 给 anilist_id：跳过识别，直接把文件名里的集号当 AniList 集号用，
         适合映射表查不到、用户已在网页上人工确认了条目的情况
     """
@@ -171,9 +183,13 @@ def scan(
     if not root.is_dir():
         report.note = f"这不是文件夹：{root}"
         return report
-    if tmdb_id is None and anilist_id is None:
-        report.note = "必须给出 tmdb_id 或 anilist_id，否则无法确定这个文件夹是哪部剧"
-        return report
+    if tmdb_id is None and anilist_id is None and bangumi_id is None:
+        nfo = library.read_nfo(root)
+        tmdb_id, bangumi_id = nfo.tmdb_id, nfo.bangumi_id
+        if tmdb_id is None and bangumi_id is None:
+            report.note = ("没有 TMDB / Bangumi / AniList ID，文件夹里的 tvshow.nfo 也没有，"
+                           "无法确定这个文件夹是哪部剧")
+            return report
 
     videos = find_videos(root)
     report.total_videos = len(videos)
@@ -203,7 +219,9 @@ def scan(
         if anilist_id is not None:
             r.anilist_id, r.anilist_episode = anilist_id, ep
         else:
-            res = identify.resolve(tmdb_id, season if season is not None else 1, ep, "")
+            ids = library.bangumi_ids_for(video, show=bangumi_id)
+            res = identify.resolve(tmdb_id, season if season is not None else 1, ep, "",
+                                   bangumi_ids=ids)
             if not res.anilist_id:
                 r.status, r.reason = "unidentified", res.note
                 report.episodes.append(r)
@@ -237,7 +255,8 @@ def scan(
             r.status = "not_found"
             r.reason = r.reason or f"Jimaku 上没有 anilist_id={r.anilist_id} 的字幕文件"
             continue
-        cands, chosen, reason = picker.pick(files, r.anilist_episode)
+        # 媒体库里的文件名一般已被重命名，但命名模板里带了发布组时也能用上
+        cands, chosen, reason = picker.pick(files, r.anilist_episode, hint=Path(r.video).name)
         if not chosen:
             r.status = "not_found" if not cands else "needs_review"
             r.reason = reason
@@ -261,11 +280,13 @@ if __name__ == "__main__":                            # 命令行自测
     ap = argparse.ArgumentParser(description="批量补扫一个番剧文件夹")
     ap.add_argument("--dir", required=True)
     ap.add_argument("--tmdb-id", type=int)
+    ap.add_argument("--bangumi-id", type=int)
     ap.add_argument("--anilist-id", type=int)
     ap.add_argument("--write", action="store_true", help="真正写盘（默认 dry-run）")
     ap.add_argument("--overwrite", action="store_true", help="已有日语字幕也重下覆盖")
     a = ap.parse_args()
-    rep = scan(a.dir, a.tmdb_id, a.anilist_id, dry_run=not a.write, overwrite=a.overwrite)
+    rep = scan(a.dir, a.tmdb_id, a.anilist_id, dry_run=not a.write, overwrite=a.overwrite,
+               bangumi_id=a.bangumi_id)
     print(f"{rep.root}  视频 {rep.total_videos} 个  dry_run={rep.dry_run}")
     if rep.note:
         print("  ! " + rep.note)

@@ -16,12 +16,16 @@ from fastapi.responses import HTMLResponse
 
 from . import PLUGIN_DIR  # noqa: F401  —— 导入即把 core 加进 sys.path
 
-from core import identify, jimaku, library, picker, placer, scan as scanner
+from core import bangumi, identify, jimaku, library, picker, placer, scan as scanner
 from core.settings import settings
 
 app = FastAPI(title="JaSubAuto 调试壳", description="生产请用 MoviePilot 插件，这里只用于脱机调试")
 
 UI_HTML = Path(PLUGIN_DIR) / "core" / "ui.html"
+
+
+def _int_or_none(value):
+    return int(value) if value not in (None, "") else None
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -67,9 +71,10 @@ def api_anilist(q: str = Query(..., min_length=1)) -> dict:
 
 
 @app.get("/api/resolve")
-def api_resolve(tmdb_id: int | None = None, season: int = 1,
-                episode: int = 1, title: str = "") -> dict:
-    return vars(identify.resolve(tmdb_id, season, episode, title))
+def api_resolve(tmdb_id: int | None = None, season: int = 1, episode: int = 1,
+                title: str = "", bangumi_id: int | None = None) -> dict:
+    return vars(identify.resolve(tmdb_id, season, episode, title,
+                                 bangumi_ids=bangumi.BangumiIds(show=bangumi_id)))
 
 
 @app.get("/api/candidates")
@@ -117,8 +122,9 @@ def api_download(payload: dict = Body(...)) -> dict:
 @app.post("/api/scan")
 def api_scan(payload: dict = Body(...)) -> dict:
     rep = scanner.scan(payload.get("dir") or "",
-                       tmdb_id=int(payload["tmdb_id"]) if payload.get("tmdb_id") else None,
-                       anilist_id=int(payload["anilist_id"]) if payload.get("anilist_id") else None,
+                       tmdb_id=_int_or_none(payload.get("tmdb_id")),
+                       anilist_id=_int_or_none(payload.get("anilist_id")),
+                       bangumi_id=_int_or_none(payload.get("bangumi_id")),
                        dry_run=None if payload.get("dry_run") is None else bool(payload["dry_run"]),
                        overwrite=bool(payload.get("overwrite")))
     return {"root": rep.root, "dry_run": rep.dry_run, "total_videos": rep.total_videos,
@@ -130,6 +136,7 @@ def api_scan(payload: dict = Body(...)) -> dict:
 def api_jobs(payload: dict = Body(...)) -> dict:
     """模拟 MoviePilot 入库事件，验证自动链路。插件里走的是同一个 scan.process_one。"""
     tmdb_id, title = payload.get("tmdb_id"), payload.get("title", "") or ""
+    bangumi_id = _int_or_none(payload.get("bangumi_id"))
     whitelist = settings.whitelist_ids
     if whitelist and tmdb_id not in whitelist:
         return {"status": "skipped", "reason": f"tmdb_id={tmdb_id} 不在白名单内"}
@@ -143,7 +150,8 @@ def api_jobs(payload: dict = Body(...)) -> dict:
             continue
         season, episode = scanner.parse_video(mapped)
         try:
-            results.append(scanner.process_one(tmdb_id, title, season, episode, path))
+            results.append(scanner.process_one(tmdb_id, title, season, episode, path,
+                                               bangumi_id=bangumi_id))
         except Exception as exc:
             results.append({"video": path, "status": "error", "reason": str(exc)})
     counts: dict[str, int] = {}

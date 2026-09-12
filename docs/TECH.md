@@ -26,6 +26,36 @@
 CC/SDH 排在干净台词之后的原因：它是逐字听写、时间轴最准，但夹带说话人标注和音效描述。
 标注现在会被 `cleaner.py` 清掉，但听写体和字幕组翻译体的差异清不掉，所以排序不变。
 
+### 同分候选怎么挑（`picker._break_tie`）
+
+早期规则是"分不出唯一最优就交人工"。2026-09-12 用真实 Jimaku 数据跑了三部剧：
+
+| 剧 | 结果 | 同分的是什么 |
+|---|---|---|
+| 葬送的芙莉莲 第二季（entry 11446） | 10/10 集待人工 | NanakoRaws 同一份字幕的 `.ass` 和 `.srt` |
+| 上伊那牡丹（entry 11837） | 12/12 集待人工 | Nekomoe kissaten&LoliHouse、Haruhana、KitaujiSub 三组的中日双语 |
+| 葬送的芙莉莲（entry 729） | 1/28 集待人工 | 两组双语，外加一个被当成第 1 集的 `01-04` 合集文件 |
+
+同分的候选都是这一集、同一语言档的字幕，挑哪个都不算下错；交人工只是把一个没有信息量的
+选择推给用户逐集点。所以改成按规则挑：
+
+1. **同一份字幕的不同格式**（去掉扩展名后同名）只留一个，按 `FORMAT_ORDER` 取，srt 优先——
+   所有播放端都能直接显示，ass 在不支持的客户端上会让 Jellyfin 转码烧录
+2. **与视频同组**：自动模式把下载时的原始文件名（`transferinfo.file_list` / `fileitem`）
+   当 hint 传进来。入库会重命名，发布组只在原始文件名里还看得到
+3. **覆盖集数最多的组** → 4. **组内最近更新** → 5. **组名排序**
+
+3~5 是按组算的指标，每一集算出来都一样，所以整部剧各集会落在同一个组，
+不会第 1 集 A 组、第 2 集 B 组。没写组名的文件（`Kinomi Master - 01 「…」 (MX …)`）
+用"去掉分集标题和数字后剩下的部分"当组键，见 `picker.release_group()`。
+
+顺带修的两个过滤问题：
+- `BATCH_KEYWORDS` 里原来有 `season`，会把 `Show 2nd Season - 01.srt` 这种单集当合集丢掉
+- 集号范围只写死了 `1-12` / `1-24`，`01-04` 漏网。改成正则 `_RANGE`，
+  前面是连字符或数字的不算，避免日期 `2024-06-18` 被认成范围
+
+仍然交人工的只剩**身份**问题：映射表查不到、只能靠标题搜索、季号为 0。
+
 ### 说话人标注清洗（`cleaner.py`）
 
 实测同一集的五个不同来源都带 `（アイゼン）` 这类标注，**和文件名有没有标 `[cc]` 无关**，
@@ -126,6 +156,39 @@ plugin/plugins.v2/jasubauto/
 - V3 能回退兼容加载 V2 插件
 
 ## 已验证的外部接口事实（M0 实测，不要再猜）
+
+### Bangumi ID（Jellyfin 的 Bangumi 插件刮削的库）
+
+实测结论（2026-09-12）：
+
+- **nfo 格式**：Jellyfin 的 nfo 保存器把 provider id 写成 `<{key 小写}id>`，插件的 key 是 `Bangumi`，
+  所以是 `<bangumiid>`。三层都有：`SeasonProvider` 给每一季设自己的条目 ID（第一季回落到剧级 ID），
+  `EpisodeProvider` 给每一集写 Bangumi 的**集 ID**
+- **`<id>` 是 TVDB**：`SeriesNfoSaver` 把 TVDB ID 写进 `<id>`。早期 `read_nfo` 把 `<id>` 当 tmdb 兜底，已删
+- **API**：`api.bgm.tv` 不带能认出应用的 UA 返回 403；条目不存在 404
+  - `/v0/subjects/{id}`：`name` 是日文原名，`infobox` 的「别名」里常有和 AniList 罗马音一字不差的名字
+  - `/v0/episodes?subject_id=&type=0`：正片列表，每集有 `sort`（跨季连续）和 `ep`（本季）。
+    咒术回战第二季 `sort 25~47 / ep 1~23`，芙莉莲第二季 `sort 29~38 / ep 1~10`
+  - `/v0/episodes/{id}`：带 `subject_id`、`sort`、`ep`，集 nfo 里的 ID 查这个
+  - `/v0/subjects/{id}/subjects`：`relation == "续集"` 且 `type == 2`（动画）是下一季
+- **BangumiExtLinker**（CC BY 4.0，自动匹配生成）：23206 个条目里 11085 个能经 MAL/AniDB 接到 AniList（48%）。
+  **新番严重滞后**：芙莉莲第二季 2026-01 开播，9 月仍没有任何外链
+- **Jimaku 标题搜索**（`/entries/search?query=`）是模糊的：`Kamiina Botan` 带出木の実マスター，
+  `Dungeon Meshi` 带出三部《在地下城寻求邂逅》。日文名搜更准，但 Bangumi 的日文原名不一定等于
+  Jimaku 的 `japanese_name`（咒术回战第二季：`呪術廻戦 懐玉・玉折／渋谷事変` vs `呪術廻戦 第2期`），
+  别名里的罗马音 `Jujutsu Kaisen 2nd Season` 却和 Jimaku 的 `name` 一致。所以先用罗马音别名搜、
+  再用日文名，只认 `name` / `japanese_name` / `english_name` 与标题集合全等的条目
+- 同名重制版（如 1981 与 2022 的《うる星やつら》）靠 AniList 开播年份核对，差 1 年以上不认
+
+识别顺序（`identify.resolve_bangumi`）：
+
+1. 集 nfo 的集 ID → 条目 + 本季集号。**集号要和视频文件名对得上**（ep 或 sort 之一），
+   对不上说明 nfo 过期，改用下一步
+2. season.nfo 的条目；没有时用剧级 ID，但**只用于第 1 季**——TMDB 的第 2 季未必是 Bangumi 的下一个条目
+3. `bangumi.locate` 把视频集号定位到条目内集号：本季编号直接用；连续编号查 sort；
+   超出本条目集数就减掉集数、顺着续集往下走（芙莉莲 S01E36 → 第二季第 8 集）。
+   走过续集后 sort 若也能算出结果，两者必须一致
+4. 条目 → AniList：映射表（MAL/AniDB 指向多个 AniList 条目时交人工）→ 标题全等 + 年份核对
 
 ### Jimaku API
 
