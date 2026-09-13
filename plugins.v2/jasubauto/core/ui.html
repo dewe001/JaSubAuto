@@ -48,6 +48,7 @@
        border:1px solid var(--line); border-radius:50%; color:var(--dim); font-size:10px;
        cursor:help; margin-left:4px; vertical-align:middle; }
   summary { cursor:pointer; color:var(--dim); font-size:13px; }
+  .log { white-space:pre-wrap; word-break:break-all; font-size:12px; margin:6px 0 0; color:var(--dim); }
 </style>
 </head>
 <body>
@@ -279,6 +280,7 @@ async function runScan(force){
       <code>${esc(d.root)}</code> · ${d.total_videos} 个视频${d.dry_run?' · <b>试运行</b>':''}
       <div style="margin-top:6px">${sum}</div>
       ${d.note ? `<div class="muted" style="margin-top:6px">${esc(d.note)}</div>` : ''}
+      ${d.log && d.log.length ? `<div class="muted" style="margin-top:6px">${esc(d.log.join('；'))}</div>` : ''}
       ${action}
     </div>` +
     d.episodes.map(e => {
@@ -300,6 +302,8 @@ async function runScan(force){
         ${e.target ? `<div class="muted" style="margin-top:2px">${d.dry_run?'将写入':'已写入'}
            <code>${esc(basename(e.target))}</code>${e.replaced?` · 已替换 <code>${esc(e.replaced)}</code>`:''}</div>` : ''}
         ${e.reason ? `<div class="muted" style="margin-top:2px">${esc(e.reason)}</div>` : ''}
+        ${e.log && e.log.length ? `<details style="margin-top:4px"><summary>识别过程（${e.log.length} 条）</summary>
+          <pre class="log">${esc(e.log.join(String.fromCharCode(10)))}</pre></details>` : ''}
       </div>${manual}</div>`;
     }).join('');
 }

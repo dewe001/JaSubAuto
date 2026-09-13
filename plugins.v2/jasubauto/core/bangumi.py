@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import http
+from . import http, trace
 from .settings import settings
 
 API = "https://api.bgm.tv"
@@ -202,7 +202,8 @@ def map_row(subject_id: int) -> dict | None:
     if _map_index is None:
         try:
             rows = json.loads(ensure_map_file().read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as exc:
+            trace.log(f"BangumiExtLinker 映射表读不到：{exc}")
             return None                       # 下载失败不缓存，下次再试
         index = {}
         for row in rows:

@@ -16,7 +16,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "plugins.v2" / "jasubauto"))
 
-from core import bangumi, cleaner, http, identify, jimaku, library, merge, picker, placer, scan  # noqa: E402
+from core import bangumi, cleaner, http, identify, jimaku, library, merge, picker, placer, scan, trace  # noqa: E402
 from core.settings import settings  # noqa: E402
 
 
@@ -805,3 +805,38 @@ def test_network_cause_reaches_the_note(monkeypatch):
     monkeypatch.setattr(bangumi, "_api_get", lambda path, params=None: None)
     r = identify.resolve(None, 1, 5, bangumi_ids=bangumi.BangumiIds(show=400602))
     assert r.anilist_id is None and "ConnectTimeout" in r.note
+
+
+# ---------- 识别过程日志 ----------
+
+def test_failed_request_is_logged_with_reason(monkeypatch):
+    monkeypatch.setattr(http._httpx, "Client", _DeadClient)
+    with trace.capture() as lines:
+        for n in (1, 2):
+            with pytest.raises(http.HttpError):
+                http.get_json(f"https://api.bgm.tv/v0/subjects/{n}")
+    assert "失败" in lines[0] and "ConnectTimeout" in lines[0] and "直连" in lines[0]
+    assert "跳过" in lines[1]
+
+
+def test_scan_keeps_a_log_for_each_episode(tmp_path, monkeypatch):
+    """「未识别」时页面上要能展开看到每一步：读到哪些 ID、查了什么、为什么没认出来。"""
+    show = tmp_path / "葬送的芙莉莲"
+    video = show / "Season 1" / "葬送的芙莉莲 - S01E05 - 第 5 集.mkv"
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"")
+    _nfo(show / "tvshow.nfo", "<bangumiid>400602</bangumiid>")
+    monkeypatch.setattr(jimaku, "search_entries", lambda aid: [{"id": 729}])
+    monkeypatch.setattr(jimaku, "list_files",
+                        lambda eid: [_f("[SubsPlease] Sousou no Frieren - 05 (1080p) [ABC]_ja.srt")])
+    rep = scan.scan(str(show), dry_run=True)
+    log = " | ".join(rep.episodes[0].log)
+    assert "Bangumi" in log and "Jimaku" in log and "候选" in log
+    assert "tvshow.nfo" in rep.log[0]
+
+
+def test_process_one_returns_its_log(tmp_path):
+    video = tmp_path / "Show S01E05.mkv"
+    video.write_bytes(b"")
+    out = scan.process_one(None, "", 1, 5, str(video))
+    assert out["status"] == "unidentified" and out["log"]

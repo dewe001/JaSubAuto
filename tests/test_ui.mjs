@@ -93,6 +93,7 @@ function fakeFetch(url, opts) {
       season: 1, library_episode: 12, anilist_id: 154587, anilist_episode: 12,
       status: "needs_review", picked: "", lang: "", target: "",
       reason: "有 3 个同分候选，无法自动判定，需人工选择",
+      log: ["GET api.bgm.tv/v0/episodes → 失败，10.0s，ConnectTimeout（直连）：<timed out>"],
     };
     return Promise.resolve({ json: () => Promise.resolve({
       root: "/媒体/日番/葬送的芙莉莲 (2023)", dry_run: dry, total_videos: 2, note: "",
@@ -247,6 +248,13 @@ test("点「手动挑」填好参数并自动查候选", async () => {
   assert.equal(doc.getElementById("manualBox").open, true, "手动区应自动展开");
   assert.ok(CALLS.some(c => c.path.endsWith("/candidates")), "应自动查候选，不用手点");
   assert.match(doc.getElementById("cands").innerHTML, /data-act="dl"/);
+});
+
+test("每集可展开识别过程，内容经过转义", async () => {
+  const out = doc.getElementById("scanOut").innerHTML;
+  assert.match(out, /识别过程（1 条）/);
+  assert.ok(out.includes("&lt;timed out&gt;"), "日志里的尖括号必须转义");
+  assert.equal(out.includes("<timed out>"), false);
 });
 
 test("已删除「找剧」「查候选字幕」两个独立模块", () => {

@@ -3,9 +3,10 @@
 不绑定某一个 HTTP 库：MoviePilot 容器里一定有 requests，独立调试时用 httpx，两个都不在才报错。
 **不要用 stdlib 的 urllib**：Windows 上它走系统证书库，连 jimaku.cc 会报 CERTIFICATE_VERIFY_FAILED。
 
-放在这一层、所有请求自动享有的两件事：
+放在这一层、所有请求自动享有的三件事：
   * 代理：`settings.proxy`（插件里默认跟随 MoviePilot 的代理设置）。api.bgm.tv 在国内直连不通
   * 连不上就快速放弃：连接超时 10 秒；某个站连不上后 5 分钟内直接跳过，不再每集等一次超时
+  * 每次请求的结果（含报错原因）记进 trace，页面上逐集可见
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import json as _json
 import time
 from urllib.parse import urlsplit, urlunsplit
 
+from . import trace
 from .settings import settings
 
 try:                                    # 优先 httpx
@@ -108,6 +110,7 @@ def _request(method: str, url: str, *, headers=None, params=None, json=None,
     label = f"{method} {host}{path if len(path) <= 60 else path[:57] + '...'}"
     problem = host_problem(host)
     if problem:
+        trace.log(f"{label} → 跳过：{problem}")
         raise HttpError(f"{host} 连不上：{problem}")
 
     proxy = proxy_url()
@@ -120,7 +123,9 @@ def _request(method: str, url: str, *, headers=None, params=None, json=None,
         via = f"经代理 {describe_proxy()}" if proxy else "直连"
         reason = f"{type(exc).__name__}（{via}）：{detail[:120]}"
         _down[host] = (time.time() + DOWN_SECONDS, reason)
+        trace.log(f"{label} → 失败，{time.monotonic() - start:.1f}s，{reason}")
         raise HttpError(f"{host} 连不上：{reason}") from exc
+    trace.log(f"{label} → HTTP {status}，{time.monotonic() - start:.1f}s")
     return status, body
 
 

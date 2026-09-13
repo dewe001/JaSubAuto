@@ -20,7 +20,7 @@ from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.types import EventType
 
-from .core import bangumi, http, identify, jimaku, library, picker, placer, scan as scanner
+from .core import bangumi, http, identify, jimaku, library, picker, placer, scan as scanner, trace
 from .core.settings import configure, settings as core_settings
 
 UI_HTML = Path(__file__).parent / "core" / "ui.html"
@@ -172,6 +172,7 @@ class JaSubAuto(_PluginBase):
         })
         # 代理不走 configure：它把空字符串当"没填"跳过，清空配置后会残留上一次的值
         core_settings.proxy = (config.get("proxy") or "").strip() or _mp_proxy()
+        trace.set_sink(lambda msg: logger.info("【日语字幕】" + msg))
 
     def _data_dir(self) -> str:
         """映射表（7.5MB）落在插件的数据目录，插件更新不会被清掉。"""
@@ -264,8 +265,10 @@ class JaSubAuto(_PluginBase):
 
     def api_resolve(self, tmdb_id: int = None, season: int = 1, episode: int = 1,
                     title: str = "", bangumi_id: int = None) -> dict:
-        return vars(identify.resolve(tmdb_id, season, episode, title,
-                                     bangumi_ids=bangumi.BangumiIds(show=bangumi_id)))
+        with trace.capture() as lines:
+            result = identify.resolve(tmdb_id, season, episode, title,
+                                      bangumi_ids=bangumi.BangumiIds(show=bangumi_id))
+        return vars(result) | {"log": lines}
 
     def api_candidates(self, anilist_id: int, episode: int) -> dict:
         entries = jimaku.search_entries(anilist_id)
@@ -319,7 +322,7 @@ class JaSubAuto(_PluginBase):
             bangumi_id=int(payload["bangumi_id"]) if payload.get("bangumi_id") else None,
         )
         return {"root": rep.root, "dry_run": rep.dry_run, "total_videos": rep.total_videos,
-                "note": rep.note, "summary": rep.summary,
+                "note": rep.note, "summary": rep.summary, "log": rep.log,
                 "episodes": [vars(e) for e in rep.episodes]}
 
     # ---------- 配置表单与详情页 ----------
