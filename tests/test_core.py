@@ -36,6 +36,7 @@ def _settings(tmp_path_factory, monkeypatch):
     identify._index = None                          # 索引是模块级缓存，每个用例都得清
     identify._id_index = None
     bangumi.reset_cache()
+    http.reset()                                    # 「连不上暂时跳过」的记录也是模块级的
     settings.subtitle_lang_suffix = "ja"
     settings.fansub_whitelist = "Netflix,Amazon,SubsPlease,Moozzi2"
     settings.media_roots = ""
@@ -771,3 +772,36 @@ def test_proxy_description_hides_credentials():
     assert http.describe_proxy() == "http://***@10.0.0.2:7890"
     settings.proxy = ""
     assert http.describe_proxy() == "直连"
+
+
+# ---------- 连不上的站暂时跳过 ----------
+
+class _DeadClient(_RecordingClient):
+    calls: list = []
+
+    def request(self, method, url, **kwargs):
+        _DeadClient.calls.append(url)
+        raise http._httpx.ConnectTimeout("timed out")
+
+
+def test_unreachable_host_is_skipped_for_a_while(monkeypatch):
+    """容器里 api.bgm.tv 连不上时每集都等一次超时，12 集要十几分钟：失败一次后先跳过这个站。"""
+    _DeadClient.calls = []
+    monkeypatch.setattr(http._httpx, "Client", _DeadClient)
+    for _ in range(3):
+        with pytest.raises(http.HttpError):
+            http.get_json("https://api.bgm.tv/v0/subjects/1")
+    assert len(_DeadClient.calls) == 1
+    assert "ConnectTimeout" in http.host_problem("api.bgm.tv")
+    with pytest.raises(http.HttpError):                 # 别的站不受影响，照常去连
+        http.get_json("https://jimaku.cc/api/entries/search")
+    assert len(_DeadClient.calls) == 2
+
+
+def test_network_cause_reaches_the_note(monkeypatch):
+    """说明里必须带上连不上的原因，否则用户只看到「未识别」，没法排查。"""
+    import time
+    http._down["api.bgm.tv"] = (time.time() + 60, "ConnectTimeout（直连）：timed out")
+    monkeypatch.setattr(bangumi, "_api_get", lambda path, params=None: None)
+    r = identify.resolve(None, 1, 5, bangumi_ids=bangumi.BangumiIds(show=400602))
+    assert r.anilist_id is None and "ConnectTimeout" in r.note

@@ -183,7 +183,7 @@ def _bangumi_to_anilist(subject_id: int) -> tuple[int | None, str, bool]:
     # 映射表没有外链：用条目的日文原名和别名，找 Jimaku 上**一字不差**的条目
     info = bangumi.subject(subject_id)
     if not info:
-        return None, f"取不到 Bangumi 条目 {subject_id}", False
+        return None, f"取不到 Bangumi 条目 {subject_id}{bangumi.network_problem()}", False
     names = bangumi.titles(info)
     if not names:
         return None, f"Bangumi 条目 {subject_id} 没有标题", True
@@ -213,7 +213,9 @@ def _bangumi_to_anilist(subject_id: int) -> tuple[int | None, str, bool]:
     year = anilist_start_year(anilist_id)
     bgm_year = (info.get("date") or "")[:4]
     if year is None:
-        return None, f"「{title}」同名命中 anilist={anilist_id}，但查不到开播年份无法核对，交人工", False
+        problem = http.host_problem(ANILIST_API)
+        return None, (f"「{title}」同名命中 anilist={anilist_id}，但查不到开播年份无法核对"
+                      f"{'（' + problem + '）' if problem else ''}，交人工"), False
     if not bgm_year.isdigit() or abs(int(bgm_year) - year) > 1:
         return None, (f"「{title}」同名命中 anilist={anilist_id}，但开播年份对不上"
                       f"（Bangumi {bgm_year or '未知'} / AniList {year}），交人工"), True
