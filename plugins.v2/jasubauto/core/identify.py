@@ -16,7 +16,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import bangumi, http, jimaku
+from . import bangumi, http, jimaku, trace
 from .settings import settings
 
 MAPPING_URL = "https://raw.githubusercontent.com/Fribb/anime-lists/master/anime-list-full.json"
@@ -183,7 +183,7 @@ def _bangumi_to_anilist(subject_id: int) -> tuple[int | None, str, bool]:
     # 映射表没有外链：用条目的日文原名和别名，找 Jimaku 上**一字不差**的条目
     info = bangumi.subject(subject_id)
     if not info:
-        return None, f"取不到 Bangumi 条目 {subject_id}", False
+        return None, f"取不到 Bangumi 条目 {subject_id}{bangumi.network_problem()}", False
     names = bangumi.titles(info)
     if not names:
         return None, f"Bangumi 条目 {subject_id} 没有标题", True
@@ -201,6 +201,7 @@ def _bangumi_to_anilist(subject_id: int) -> tuple[int | None, str, bool]:
                 continue
             if {_norm(e.get(k)) for k in ("name", "japanese_name", "english_name")} & wanted:
                 hits[e["anilist_id"]] = e.get("name") or ""
+        trace.log(f"Jimaku 标题搜索「{query}」：{len(entries)} 条，全等命中 {sorted(hits) or '无'}")
         if hits:
             break
 
@@ -211,9 +212,13 @@ def _bangumi_to_anilist(subject_id: int) -> tuple[int | None, str, bool]:
         return None, f"「{title}」在 Jimaku 上有多个同名条目 {sorted(hits)}，交人工", True
     anilist_id, jimaku_name = next(iter(hits.items()))
     year = anilist_start_year(anilist_id)
+    trace.log(f"AniList anilist={anilist_id} 开播年份：{year if year is not None else '查不到'}，"
+              f"Bangumi 开播：{(info.get('date') or '未知')[:4]}")
     bgm_year = (info.get("date") or "")[:4]
     if year is None:
-        return None, f"「{title}」同名命中 anilist={anilist_id}，但查不到开播年份无法核对，交人工", False
+        problem = http.host_problem(ANILIST_API)
+        return None, (f"「{title}」同名命中 anilist={anilist_id}，但查不到开播年份无法核对"
+                      f"{'（' + problem + '）' if problem else ''}，交人工"), False
     if not bgm_year.isdigit() or abs(int(bgm_year) - year) > 1:
         return None, (f"「{title}」同名命中 anilist={anilist_id}，但开播年份对不上"
                       f"（Bangumi {bgm_year or '未知'} / AniList {year}），交人工"), True
@@ -303,8 +308,12 @@ def resolve(tmdb_id: int | None, season: int, episode: int, title: str = "",
     """完整识别流程：TMDB 映射表 → Bangumi ID → 标题兜底（不可信）。"""
     notes: list[str] = []
     fallback_candidates: list[dict] = []
+    trace.log(f"识别第 {season} 季第 {episode} 集：tmdb={tmdb_id or '无'}"
+              + (f"，Bangumi 集/季/剧 = {bangumi_ids.episode}/{bangumi_ids.season}/{bangumi_ids.show}"
+                 if bangumi_ids else "，没有 Bangumi ID"))
     if tmdb_id:
         result = resolve_by_mapping(tmdb_id, season, episode)
+        trace.log(f"TMDB 映射表：{result.note}")
         if result.anilist_id:
             return result
         notes.append(result.note)
@@ -314,6 +323,7 @@ def resolve(tmdb_id: int | None, season: int, episode: int, title: str = "",
 
     if bangumi_ids:
         result = resolve_bangumi(bangumi_ids, season, episode)
+        trace.log(f"Bangumi：{result.note}")
         if result.anilist_id:
             return result
         notes.append(result.note)

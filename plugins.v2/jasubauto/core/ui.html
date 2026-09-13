@@ -48,13 +48,16 @@
        border:1px solid var(--line); border-radius:50%; color:var(--dim); font-size:10px;
        cursor:help; margin-left:4px; vertical-align:middle; }
   summary { cursor:pointer; color:var(--dim); font-size:13px; }
+  .log { white-space:pre-wrap; word-break:break-all; font-size:12px; margin:6px 0 0; color:var(--dim); }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>日语字幕</h1>
   <div class="sub"><span id="health"></span>
-    <span class="tag" style="margin-left:6px">__BUILD__</span></div>
+    <span class="tag" style="margin-left:6px">__BUILD__</span>
+    <a href="#" data-act="netcheck" style="margin-left:6px">网络自检</a></div>
+  <div id="netOut" style="margin-bottom:16px"></div>
 
   <!-- 1 · 补字幕 -->
   <div class="card">
@@ -157,6 +160,7 @@ function post(path, body){
 fetch(U('/health')).then(r=>r.json()).then(h=>{
   $('health').textContent = (h.jimaku_token_configured ? 'Jimaku 已配置' : '⚠ 未配置 Jimaku Token')
     + ' · .' + h.lang_suffix
+    + (h.proxy ? ' · ' + (h.proxy === '直连' ? '不走代理' : '代理 ' + h.proxy) : '')
     + ' · ' + (h.subtitle_pref === 'japanese' ? '纯日语优先' : '中日双语优先')
     + (h.strip_annotations ? ' · 去说话人标注' : '')
     + (h.merge_bilingual ? ' · 合并中文字幕' : '')
@@ -278,6 +282,7 @@ async function runScan(force){
       <code>${esc(d.root)}</code> · ${d.total_videos} 个视频${d.dry_run?' · <b>试运行</b>':''}
       <div style="margin-top:6px">${sum}</div>
       ${d.note ? `<div class="muted" style="margin-top:6px">${esc(d.note)}</div>` : ''}
+      ${d.log && d.log.length ? `<div class="muted" style="margin-top:6px">${esc(d.log.join('；'))}</div>` : ''}
       ${action}
     </div>` +
     d.episodes.map(e => {
@@ -299,6 +304,8 @@ async function runScan(force){
         ${e.target ? `<div class="muted" style="margin-top:2px">${d.dry_run?'将写入':'已写入'}
            <code>${esc(basename(e.target))}</code>${e.replaced?` · 已替换 <code>${esc(e.replaced)}</code>`:''}</div>` : ''}
         ${e.reason ? `<div class="muted" style="margin-top:2px">${esc(e.reason)}</div>` : ''}
+        ${e.log && e.log.length ? `<details style="margin-top:4px"><summary>识别过程（${e.log.length} 条）</summary>
+          <pre class="log">${esc(e.log.join(String.fromCharCode(10)))}</pre></details>` : ''}
       </div>${manual}</div>`;
     }).join('');
 }
@@ -365,6 +372,17 @@ async function download(url, name){
     <div style="margin-top:4px"><code>${esc(basename(d.target))}</code></div></div>`;
 }
 
+// ---------- 网络自检 ----------
+
+/** 从插件所在的容器里挨个试连外部站点。识别失败时先点它，一眼看出是不是网络/代理问题。 */
+async function netcheck(){
+  $('netOut').innerHTML = '<div class="muted">自检中…（每个站最多等十几秒）</div>';
+  const d = await (await fetch(U('/netcheck'))).json();
+  $('netOut').innerHTML = `<div class="note"><div class="muted">代理：${esc(d.proxy)}</div>` +
+    (d.results || []).map(r => `<div>${r.ok ? '✅' : '❌'} ${esc(r.name)}<span class="muted">（${esc(r.purpose)}）</span>
+      · ${esc(r.detail)} · ${r.seconds}s</div>`).join('') + '</div>';
+}
+
 // ---------- 事件委托 ----------
 // 列表是动态生成的，绑在 document 上比给每行挂 onclick 可靠
 
@@ -381,6 +399,7 @@ document.addEventListener('click', ev => {
   else if(act === 'dl') download(el.getAttribute('data-url'), el.getAttribute('data-name'));
   else if(act === 'commit') runScan(false);
   else if(act === 'manual') toManual(el);
+  else if(act === 'netcheck') netcheck();
 });
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c =>

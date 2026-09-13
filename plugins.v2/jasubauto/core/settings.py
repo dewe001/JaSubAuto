@@ -29,6 +29,9 @@ class Settings:
     merge_bilingual: bool = True        # 视频旁边有中文字幕时合成中日双语
     keep_japanese_only: bool = True     # 合并成功时另存一份纯日语，见 placer.RAW_TITLE
 
+    # 网络
+    proxy: str = ""                     # 外部请求走的代理；插件里留空时跟随 MoviePilot 的代理设置
+
     # 媒体库
     media_roots: str = ""               # 浏览媒体库的起点，逗号分隔
 

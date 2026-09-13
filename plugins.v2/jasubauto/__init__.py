@@ -20,7 +20,7 @@ from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.types import EventType
 
-from .core import bangumi, identify, jimaku, library, picker, placer, scan as scanner
+from .core import bangumi, http, identify, jimaku, library, netcheck, picker, placer, scan as scanner, trace
 from .core.settings import configure, settings as core_settings
 
 UI_HTML = Path(__file__).parent / "core" / "ui.html"
@@ -97,6 +97,16 @@ def _bangumi_id(mediainfo):
         return None
 
 
+def _mp_proxy() -> str:
+    """MoviePilot 的代理设置：PROXY_HOST，没填时它会退回 HTTPS_PROXY / HTTP_PROXY 环境变量。"""
+    try:
+        from app.core.config import settings as mp_settings
+        proxies = mp_settings.PROXY or {}
+        return proxies.get("https") or proxies.get("http") or ""
+    except Exception:
+        return ""
+
+
 def _path_of(item):
     """把 fileitem / 路径字符串统一成路径字符串。"""
     if item is None:
@@ -130,7 +140,7 @@ class JaSubAuto(_PluginBase):
     plugin_name = "日语字幕补全（Jimaku）"
     plugin_desc = "入库后自动从 jimaku.cc 补日语字幕，并提供手动挑选/整部剧批量补扫的网页"
     plugin_icon = "jasubauto.png"          # 解析到本仓库的 icons/ 下
-    plugin_version = "0.7.1"
+    plugin_version = "0.7.2"
     plugin_author = "dewe001"
     author_url = "https://github.com/dewe001"
     plugin_config_prefix = "jasubauto_"
@@ -160,6 +170,9 @@ class JaSubAuto(_PluginBase):
             "media_roots": config.get("media_roots", ""),
             "data_dir": self._data_dir(),
         })
+        # 代理不走 configure：它把空字符串当"没填"跳过，清空配置后会残留上一次的值
+        core_settings.proxy = (config.get("proxy") or "").strip() or _mp_proxy()
+        trace.set_sink(lambda msg: logger.info("【日语字幕】" + msg))
 
     def _data_dir(self) -> str:
         """映射表（7.5MB）落在插件的数据目录，插件更新不会被清掉。"""
@@ -206,6 +219,8 @@ class JaSubAuto(_PluginBase):
              "summary": "下载并落盘单个字幕"},
             {**common, "path": "/scan", "endpoint": self.api_scan, "methods": ["POST"],
              "summary": "批量补扫一个番剧文件夹"},
+            {**common, "path": "/netcheck", "endpoint": self.api_netcheck, "methods": ["GET"],
+             "summary": "网络自检"},
         ]
 
     def api_ui(self) -> HTMLResponse:
@@ -230,7 +245,12 @@ class JaSubAuto(_PluginBase):
             "strip_annotations": core_settings.strip_annotations,
             "merge_bilingual": core_settings.merge_bilingual,
             "keep_japanese_only": core_settings.keep_japanese_only,
+            "proxy": http.describe_proxy(),
         }
+
+    def api_netcheck(self) -> dict:
+        """从 MoviePilot 容器里挨个试连外部站点，页面「网络自检」用。"""
+        return netcheck.run()
 
     def api_library(self, q: str = "", root: str = "") -> dict:
         """按关键字在番剧库里找剧。q 为空只报总数，不铺满一屏。"""
@@ -251,8 +271,10 @@ class JaSubAuto(_PluginBase):
 
     def api_resolve(self, tmdb_id: int = None, season: int = 1, episode: int = 1,
                     title: str = "", bangumi_id: int = None) -> dict:
-        return vars(identify.resolve(tmdb_id, season, episode, title,
-                                     bangumi_ids=bangumi.BangumiIds(show=bangumi_id)))
+        with trace.capture() as lines:
+            result = identify.resolve(tmdb_id, season, episode, title,
+                                      bangumi_ids=bangumi.BangumiIds(show=bangumi_id))
+        return vars(result) | {"log": lines}
 
     def api_candidates(self, anilist_id: int, episode: int) -> dict:
         entries = jimaku.search_entries(anilist_id)
@@ -306,7 +328,7 @@ class JaSubAuto(_PluginBase):
             bangumi_id=int(payload["bangumi_id"]) if payload.get("bangumi_id") else None,
         )
         return {"root": rep.root, "dry_run": rep.dry_run, "total_videos": rep.total_videos,
-                "note": rep.note, "summary": rep.summary,
+                "note": rep.note, "summary": rep.summary, "log": rep.log,
                 "episodes": [vars(e) for e in rep.episodes]}
 
     # ---------- 配置表单与详情页 ----------
@@ -330,6 +352,11 @@ class JaSubAuto(_PluginBase):
                     col(12, "VTextField", {"model": "jimaku_api_token",
                                            "label": "Jimaku API Token",
                                            "placeholder": "在 https://jimaku.cc/profile 申请"}),
+                ]},
+                {"component": "VRow", "content": [
+                    col(12, "VTextField", {"model": "proxy",
+                                           "label": "代理（留空跟随 MoviePilot 的代理设置）",
+                                           "placeholder": "http://192.168.1.2:7890"}),
                 ]},
                 {"component": "VRow", "content": [
                     col(6, "VTextField", {"model": "media_roots", "label": "媒体库根目录（逗号分隔）",
@@ -366,7 +393,7 @@ class JaSubAuto(_PluginBase):
                                 "已存在的字幕文件永远不会被覆盖。"}}]}]},
             ],
         }], {"enabled": False, "probe_only": True, "dry_run": True,
-             "jimaku_api_token": "", "media_roots": "", "series_whitelist": "",
+             "jimaku_api_token": "", "proxy": "", "media_roots": "", "series_whitelist": "",
              "fansub_whitelist": "Netflix,Amazon,SubsPlease,Moozzi2", "lang_suffix": "ja",
              "subtitle_pref": "bilingual", "strip_annotations": True,
              "merge_bilingual": True, "keep_japanese_only": True}

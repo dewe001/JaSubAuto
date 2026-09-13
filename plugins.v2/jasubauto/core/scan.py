@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import bangumi, identify, jimaku, library, picker, placer
+from . import bangumi, identify, jimaku, library, picker, placer, trace
 from .settings import settings
 
 # 从视频文件名里直接取季+集，媒体库经 MoviePilot 整理后基本都是这个格式
@@ -42,6 +42,7 @@ class EpisodeResult:
     target: str = ""
     reason: str = ""
     replaced: str = ""        # 覆盖掉的旧字幕文件名
+    log: list[str] = field(default_factory=list)   # 这一集的识别过程，页面上可展开
 
 
 @dataclass
@@ -51,6 +52,7 @@ class ScanReport:
     total_videos: int = 0
     episodes: list[EpisodeResult] = field(default_factory=list)
     note: str = ""
+    log: list[str] = field(default_factory=list)
 
     @property
     def summary(self) -> dict:
@@ -92,8 +94,8 @@ def find_videos(root: Path) -> list[Path]:
     )
 
 
-def process_one(tmdb_id, title: str, season, episode, video_path: str,
-                overwrite: bool = False, source_name: str = "", bangumi_id=None) -> dict:
+def _process_one(tmdb_id, title: str, season, episode, video_path: str,
+                 overwrite: bool = False, source_name: str = "", bangumi_id=None) -> dict:
     """处理单个视频文件：识别 → 查 Jimaku → 选文件 → 落盘。
 
     自动模式（入库事件）和单集手动下载共用这一份，避免两条路径behavior 不一致。
@@ -135,6 +137,7 @@ def process_one(tmdb_id, title: str, season, episode, video_path: str,
     files = jimaku.list_files(entries[0]["id"])
     cands, chosen, reason = picker.pick(files, result.episode,
                                         hint=f"{source_name} {Path(video_path).name}")
+    trace.log(f"候选 {len(cands)} 个：{reason}")
     if not chosen:
         return {**out, "status": "needs_review" if cands else "not_found",
                 "reason": reason, "candidate_count": len(cands)}
@@ -147,6 +150,15 @@ def process_one(tmdb_id, title: str, season, episode, video_path: str,
             "status": "ok" if outcome.written else "dry_run",
             "picked": chosen.name, "lang": chosen.lang_label,
             "target": str(outcome.target), "reason": outcome.reason}
+
+
+def process_one(tmdb_id, title: str, season, episode, video_path: str,
+                overwrite: bool = False, source_name: str = "", bangumi_id=None) -> dict:
+    """处理单个视频文件（见 `_process_one`），结果里带上这一集的识别过程 `log`。"""
+    with trace.capture() as lines:
+        out = _process_one(tmdb_id, title, season, episode, video_path,
+                           overwrite=overwrite, source_name=source_name, bangumi_id=bangumi_id)
+    return {**out, "log": lines}
 
 
 def scan(
@@ -186,6 +198,7 @@ def scan(
     if tmdb_id is None and anilist_id is None and bangumi_id is None:
         nfo = library.read_nfo(root)
         tmdb_id, bangumi_id = nfo.tmdb_id, nfo.bangumi_id
+        report.log.append(f"没填 ID，从 tvshow.nfo 读到 tmdb={nfo.tmdb_id} bangumi={nfo.bangumi_id}")
         if tmdb_id is None and bangumi_id is None:
             report.note = ("没有 TMDB / Bangumi / AniList ID，文件夹里的 tvshow.nfo 也没有，"
                            "无法确定这个文件夹是哪部剧")
@@ -219,9 +232,11 @@ def scan(
         if anilist_id is not None:
             r.anilist_id, r.anilist_episode = anilist_id, ep
         else:
-            ids = library.bangumi_ids_for(video, show=bangumi_id)
-            res = identify.resolve(tmdb_id, season if season is not None else 1, ep, "",
-                                   bangumi_ids=ids)
+            with trace.capture() as lines:
+                ids = library.bangumi_ids_for(video, show=bangumi_id)
+                res = identify.resolve(tmdb_id, season if season is not None else 1, ep, "",
+                                       bangumi_ids=ids)
+            r.log += lines
             if not res.anilist_id:
                 r.status, r.reason = "unidentified", res.note
                 report.episodes.append(r)
@@ -241,12 +256,16 @@ def scan(
     for r in todo:
         if r.anilist_id in files_cache:
             continue
-        try:
-            entries = jimaku.search_entries(r.anilist_id)
-            files_cache[r.anilist_id] = jimaku.list_files(entries[0]["id"]) if entries else []
-        except Exception as exc:                      # 失败必须静默降级
-            files_cache[r.anilist_id] = []
-            r.reason = f"查 Jimaku 失败：{exc}"
+        with trace.capture() as lines:
+            try:
+                entries = jimaku.search_entries(r.anilist_id)
+                files_cache[r.anilist_id] = jimaku.list_files(entries[0]["id"]) if entries else []
+                trace.log(f"Jimaku：anilist={r.anilist_id} 有 {len(entries)} 个条目、"
+                          f"{len(files_cache[r.anilist_id])} 个字幕文件")
+            except Exception as exc:                      # 失败必须静默降级
+                files_cache[r.anilist_id] = []
+                r.reason = f"查 Jimaku 失败：{exc}"
+        r.log += lines
 
     # ---- 第三遍：逐集选文件并落盘 ----
     for r in todo:
@@ -257,6 +276,7 @@ def scan(
             continue
         # 媒体库里的文件名一般已被重命名，但命名模板里带了发布组时也能用上
         cands, chosen, reason = picker.pick(files, r.anilist_episode, hint=Path(r.video).name)
+        r.log.append(f"候选 {len(cands)} 个：{reason}")
         if not chosen:
             r.status = "not_found" if not cands else "needs_review"
             r.reason = reason

@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import http
+from . import http, trace
 from .settings import settings
 
 API = "https://api.bgm.tv"
@@ -69,6 +69,12 @@ def _api_get(path: str, params: dict | None = None):
         return http.get_json(f"{API}{path}", headers={"User-Agent": UA}, params=params)
     except Exception:
         return None
+
+
+def network_problem() -> str:
+    """api.bgm.tv 最近连不上的原因（带括号），没问题返回空串。拼进说明里，一眼看出是网络问题。"""
+    problem = http.host_problem(API)
+    return f"（{problem}）" if problem else ""
 
 
 def cached(key: tuple, fetch):
@@ -151,7 +157,7 @@ def locate(subject_id: int, number: int) -> tuple[int | None, int | None, str]:
     for hop in range(MAX_SEQUEL_HOPS + 1):
         eps = main_episodes(sid)
         if not eps:
-            return None, None, f"取不到 Bangumi 条目 {sid} 的正片列表"
+            return None, None, f"取不到 Bangumi 条目 {sid} 的正片列表{network_problem()}"
         ep_numbers = {ep for _, ep in eps}
         sort_to_ep = {s: ep for s, ep in eps if s is not None}
         by_sort = sort_to_ep.get(number)
@@ -196,7 +202,8 @@ def map_row(subject_id: int) -> dict | None:
     if _map_index is None:
         try:
             rows = json.loads(ensure_map_file().read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as exc:
+            trace.log(f"BangumiExtLinker 映射表读不到：{exc}")
             return None                       # 下载失败不缓存，下次再试
         index = {}
         for row in rows:

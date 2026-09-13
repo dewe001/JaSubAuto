@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse
 
 from . import PLUGIN_DIR  # noqa: F401  —— 导入即把 core 加进 sys.path
 
-from core import bangumi, identify, jimaku, library, picker, placer, scan as scanner
+from core import bangumi, http, identify, jimaku, library, netcheck, picker, placer, scan as scanner, trace
 from core.settings import settings
 
 app = FastAPI(title="JaSubAuto 调试壳", description="生产请用 MoviePilot 插件，这里只用于脱机调试")
@@ -46,7 +46,13 @@ def health() -> dict:
             "subtitle_pref": settings.subtitle_pref,
             "strip_annotations": settings.strip_annotations,
             "merge_bilingual": settings.merge_bilingual,
-            "keep_japanese_only": settings.keep_japanese_only}
+            "keep_japanese_only": settings.keep_japanese_only,
+            "proxy": http.describe_proxy()}
+
+
+@app.get("/api/netcheck")
+def api_netcheck() -> dict:
+    return netcheck.run()
 
 
 @app.get("/api/library")
@@ -73,8 +79,10 @@ def api_anilist(q: str = Query(..., min_length=1)) -> dict:
 @app.get("/api/resolve")
 def api_resolve(tmdb_id: int | None = None, season: int = 1, episode: int = 1,
                 title: str = "", bangumi_id: int | None = None) -> dict:
-    return vars(identify.resolve(tmdb_id, season, episode, title,
-                                 bangumi_ids=bangumi.BangumiIds(show=bangumi_id)))
+    with trace.capture() as lines:
+        result = identify.resolve(tmdb_id, season, episode, title,
+                                  bangumi_ids=bangumi.BangumiIds(show=bangumi_id))
+    return vars(result) | {"log": lines}
 
 
 @app.get("/api/candidates")
@@ -128,7 +136,7 @@ def api_scan(payload: dict = Body(...)) -> dict:
                        dry_run=None if payload.get("dry_run") is None else bool(payload["dry_run"]),
                        overwrite=bool(payload.get("overwrite")))
     return {"root": rep.root, "dry_run": rep.dry_run, "total_videos": rep.total_videos,
-            "note": rep.note, "summary": rep.summary,
+            "note": rep.note, "summary": rep.summary, "log": rep.log,
             "episodes": [vars(e) for e in rep.episodes]}
 
 

@@ -357,6 +357,26 @@ JaSubAuto/                       # 本身就是一个 MoviePilot 插件仓库，
 - **看日志**：`LOG_LEVEL=DEBUG`；MoviePilot 后台实时日志页 / `docker logs -f` / `CONFIG_DIR`（Docker 通常 `/config`）下的日志文件。
 - 如果 `PLUGIN_LOCAL_REPO_PATHS` 不生效，退路是把插件目录直接塞进容器的插件目录再重启（较笨但一定有效）。
 
+### 网络：外部请求要走代理（2026-09-13 实测）
+
+v0.7.1 部署后上伊那牡丹 12 集全部「未识别」，一次扫描超过 10 分钟。用 `MP_API_TOKEN` 调插件接口定位：
+
+| 站 | 从 NAS 容器里 | 从局域网直连（绕过代理） |
+|---|---|---|
+| jimaku.cc | 正常（约 4s） | 很慢（约 20s） |
+| graphql.anilist.co | 正常（约 4s） | 正常 |
+| api.bgm.tv | **连不上** | **IPv4、IPv6 都超时** |
+
+- 开发机开着 Clash（系统代理 `127.0.0.1:7890`），本地的"真实数据测试"全程走代理，所以没暴露问题
+- MoviePilot 自带的 Bangumi 模块用 `RequestUtils(proxies=settings.PROXY)`；插件的 `http.py` 原先不走代理
+- MoviePilot 的 `settings.PROXY` 是 `{"http": ..., "https": ...}`：优先 `PROXY_HOST`，没填时取
+  `HTTPS_PROXY` / `HTTP_PROXY` 环境变量，都没有返回 `None`
+- 失败原先被 `bangumi._api_get` 吞掉，每集每次调用都等满超时。现在连接超时 10s，
+  某个站失败后 `http.DOWN_SECONDS`（5 分钟）内直接跳过，原因拼进识别说明
+
+排查手段：手动页面「网络自检」，或 `GET /api/v1/plugin/JaSubAuto/netcheck?apikey=...`；
+逐集的识别过程在扫描结果里展开，也写进 MoviePilot 日志。
+
 ## 部署环境（已确认，2026-09-06）
 
 | 项 | 值 |

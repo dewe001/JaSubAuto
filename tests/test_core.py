@@ -16,7 +16,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "plugins.v2" / "jasubauto"))
 
-from core import bangumi, cleaner, identify, jimaku, library, merge, picker, placer, scan  # noqa: E402
+from core import bangumi, cleaner, http, identify, jimaku, library, merge, netcheck, picker, placer, scan, trace  # noqa: E402
 from core.settings import settings  # noqa: E402
 
 
@@ -36,6 +36,7 @@ def _settings(tmp_path_factory, monkeypatch):
     identify._index = None                          # 索引是模块级缓存，每个用例都得清
     identify._id_index = None
     bangumi.reset_cache()
+    http.reset()                                    # 「连不上暂时跳过」的记录也是模块级的
     settings.subtitle_lang_suffix = "ja"
     settings.fansub_whitelist = "Netflix,Amazon,SubsPlease,Moozzi2"
     settings.media_roots = ""
@@ -44,6 +45,7 @@ def _settings(tmp_path_factory, monkeypatch):
     settings.strip_annotations = True
     settings.merge_bilingual = True
     settings.keep_japanese_only = True
+    settings.proxy = ""
     # 单测不许联网：Bangumi API、Jimaku 标题搜索、AniList 开播年份一律换成假数据
     monkeypatch.setattr(bangumi, "_api_get", _fake_bangumi_api)
     monkeypatch.setattr(jimaku, "search_by_title", lambda q: list(JIMAKU_ENTRIES))
@@ -729,3 +731,127 @@ def test_scan_reads_bangumi_id_from_nfo(tmp_path, monkeypatch):
     rep = scan.scan(str(show), dry_run=True)
     ep = rep.episodes[0]
     assert (ep.status, ep.anilist_id, ep.anilist_episode) == ("dry_run", 154587, 5), ep.reason
+
+
+# ---------- 代理 ----------
+
+class _FakeResponse:
+    status_code, content = 200, b"{}"
+
+
+class _RecordingClient:
+    """记下 httpx.Client 收到的参数，不真的发请求。"""
+    seen: dict = {}
+
+    def __init__(self, **kwargs):
+        _RecordingClient.seen = kwargs
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def request(self, *args, **kwargs):
+        return _FakeResponse()
+
+
+def test_requests_go_through_configured_proxy(monkeypatch):
+    """api.bgm.tv 在国内直连不通：外部请求都要走代理（插件里默认跟随 MoviePilot 的设置）。"""
+    monkeypatch.setattr(http._httpx, "Client", _RecordingClient)
+    settings.proxy = "192.168.1.2:7890"
+    http.get_json("https://api.bgm.tv/v0/subjects/1")
+    assert _RecordingClient.seen["proxy"] == "http://192.168.1.2:7890"
+    settings.proxy = ""
+    http.get_json("https://api.bgm.tv/v0/subjects/1")
+    assert _RecordingClient.seen["proxy"] is None
+
+
+def test_proxy_description_hides_credentials():
+    settings.proxy = "http://user:secret@10.0.0.2:7890"
+    assert http.describe_proxy() == "http://***@10.0.0.2:7890"
+    settings.proxy = ""
+    assert http.describe_proxy() == "直连"
+
+
+# ---------- 连不上的站暂时跳过 ----------
+
+class _DeadClient(_RecordingClient):
+    calls: list = []
+
+    def request(self, method, url, **kwargs):
+        _DeadClient.calls.append(url)
+        raise http._httpx.ConnectTimeout("timed out")
+
+
+def test_unreachable_host_is_skipped_for_a_while(monkeypatch):
+    """容器里 api.bgm.tv 连不上时每集都等一次超时，12 集要十几分钟：失败一次后先跳过这个站。"""
+    _DeadClient.calls = []
+    monkeypatch.setattr(http._httpx, "Client", _DeadClient)
+    for _ in range(3):
+        with pytest.raises(http.HttpError):
+            http.get_json("https://api.bgm.tv/v0/subjects/1")
+    assert len(_DeadClient.calls) == 1
+    assert "ConnectTimeout" in http.host_problem("api.bgm.tv")
+    with pytest.raises(http.HttpError):                 # 别的站不受影响，照常去连
+        http.get_json("https://jimaku.cc/api/entries/search")
+    assert len(_DeadClient.calls) == 2
+
+
+def test_network_cause_reaches_the_note(monkeypatch):
+    """说明里必须带上连不上的原因，否则用户只看到「未识别」，没法排查。"""
+    import time
+    http._down["api.bgm.tv"] = (time.time() + 60, "ConnectTimeout（直连）：timed out")
+    monkeypatch.setattr(bangumi, "_api_get", lambda path, params=None: None)
+    r = identify.resolve(None, 1, 5, bangumi_ids=bangumi.BangumiIds(show=400602))
+    assert r.anilist_id is None and "ConnectTimeout" in r.note
+
+
+# ---------- 识别过程日志 ----------
+
+def test_failed_request_is_logged_with_reason(monkeypatch):
+    monkeypatch.setattr(http._httpx, "Client", _DeadClient)
+    with trace.capture() as lines:
+        for n in (1, 2):
+            with pytest.raises(http.HttpError):
+                http.get_json(f"https://api.bgm.tv/v0/subjects/{n}")
+    assert "失败" in lines[0] and "ConnectTimeout" in lines[0] and "直连" in lines[0]
+    assert "跳过" in lines[1]
+
+
+def test_scan_keeps_a_log_for_each_episode(tmp_path, monkeypatch):
+    """「未识别」时页面上要能展开看到每一步：读到哪些 ID、查了什么、为什么没认出来。"""
+    show = tmp_path / "葬送的芙莉莲"
+    video = show / "Season 1" / "葬送的芙莉莲 - S01E05 - 第 5 集.mkv"
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"")
+    _nfo(show / "tvshow.nfo", "<bangumiid>400602</bangumiid>")
+    monkeypatch.setattr(jimaku, "search_entries", lambda aid: [{"id": 729}])
+    monkeypatch.setattr(jimaku, "list_files",
+                        lambda eid: [_f("[SubsPlease] Sousou no Frieren - 05 (1080p) [ABC]_ja.srt")])
+    rep = scan.scan(str(show), dry_run=True)
+    log = " | ".join(rep.episodes[0].log)
+    assert "Bangumi" in log and "Jimaku" in log and "候选" in log
+    assert "tvshow.nfo" in rep.log[0]
+
+
+def test_process_one_returns_its_log(tmp_path):
+    video = tmp_path / "Show S01E05.mkv"
+    video.write_bytes(b"")
+    out = scan.process_one(None, "", 1, 5, str(video))
+    assert out["status"] == "unidentified" and out["log"]
+
+
+# ---------- 网络自检 ----------
+
+def test_netcheck_tells_reachable_from_unreachable(monkeypatch):
+    def fake_get_bytes(url, **kwargs):
+        if "bgm.tv" in url:
+            raise http.HttpError("api.bgm.tv 连不上：ConnectTimeout（直连）：timed out")
+        if "anilist" in url:
+            raise http.HttpError("GET 返回 400", 400)       # 有状态码就说明连得上
+        return b"ok"
+    monkeypatch.setattr(http, "get_bytes", fake_get_bytes)
+    by_name = {r["name"]: r for r in netcheck.run()["results"]}
+    assert by_name["Bangumi"]["ok"] is False and "ConnectTimeout" in by_name["Bangumi"]["detail"]
+    assert by_name["AniList"]["ok"] is True and by_name["Jimaku"]["ok"] is True
