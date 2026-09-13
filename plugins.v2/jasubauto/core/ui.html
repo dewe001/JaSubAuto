@@ -55,7 +55,9 @@
 <div class="wrap">
   <h1>日语字幕</h1>
   <div class="sub"><span id="health"></span>
-    <span class="tag" style="margin-left:6px">__BUILD__</span></div>
+    <span class="tag" style="margin-left:6px">__BUILD__</span>
+    <a href="#" data-act="netcheck" style="margin-left:6px">网络自检</a></div>
+  <div id="netOut" style="margin-bottom:16px"></div>
 
   <!-- 1 · 补字幕 -->
   <div class="card">
@@ -370,6 +372,17 @@ async function download(url, name){
     <div style="margin-top:4px"><code>${esc(basename(d.target))}</code></div></div>`;
 }
 
+// ---------- 网络自检 ----------
+
+/** 从插件所在的容器里挨个试连外部站点。识别失败时先点它，一眼看出是不是网络/代理问题。 */
+async function netcheck(){
+  $('netOut').innerHTML = '<div class="muted">自检中…（每个站最多等十几秒）</div>';
+  const d = await (await fetch(U('/netcheck'))).json();
+  $('netOut').innerHTML = `<div class="note"><div class="muted">代理：${esc(d.proxy)}</div>` +
+    (d.results || []).map(r => `<div>${r.ok ? '✅' : '❌'} ${esc(r.name)}<span class="muted">（${esc(r.purpose)}）</span>
+      · ${esc(r.detail)} · ${r.seconds}s</div>`).join('') + '</div>';
+}
+
 // ---------- 事件委托 ----------
 // 列表是动态生成的，绑在 document 上比给每行挂 onclick 可靠
 
@@ -386,6 +399,7 @@ document.addEventListener('click', ev => {
   else if(act === 'dl') download(el.getAttribute('data-url'), el.getAttribute('data-name'));
   else if(act === 'commit') runScan(false);
   else if(act === 'manual') toManual(el);
+  else if(act === 'netcheck') netcheck();
 });
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c =>

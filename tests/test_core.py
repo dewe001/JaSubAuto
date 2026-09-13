@@ -16,7 +16,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "plugins.v2" / "jasubauto"))
 
-from core import bangumi, cleaner, http, identify, jimaku, library, merge, picker, placer, scan, trace  # noqa: E402
+from core import bangumi, cleaner, http, identify, jimaku, library, merge, netcheck, picker, placer, scan, trace  # noqa: E402
 from core.settings import settings  # noqa: E402
 
 
@@ -840,3 +840,18 @@ def test_process_one_returns_its_log(tmp_path):
     video.write_bytes(b"")
     out = scan.process_one(None, "", 1, 5, str(video))
     assert out["status"] == "unidentified" and out["log"]
+
+
+# ---------- 网络自检 ----------
+
+def test_netcheck_tells_reachable_from_unreachable(monkeypatch):
+    def fake_get_bytes(url, **kwargs):
+        if "bgm.tv" in url:
+            raise http.HttpError("api.bgm.tv 连不上：ConnectTimeout（直连）：timed out")
+        if "anilist" in url:
+            raise http.HttpError("GET 返回 400", 400)       # 有状态码就说明连得上
+        return b"ok"
+    monkeypatch.setattr(http, "get_bytes", fake_get_bytes)
+    by_name = {r["name"]: r for r in netcheck.run()["results"]}
+    assert by_name["Bangumi"]["ok"] is False and "ConnectTimeout" in by_name["Bangumi"]["detail"]
+    assert by_name["AniList"]["ok"] is True and by_name["Jimaku"]["ok"] is True

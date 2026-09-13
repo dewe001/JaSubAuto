@@ -100,6 +100,12 @@ function fakeFetch(url, opts) {
       summary: dry ? { dry_run: 1, needs_review: 1 } : { ok: 1, needs_review: 1 },
       episodes: [ep, review] }) });
   }
+  if (u.pathname.endsWith("/netcheck")) {
+    return Promise.resolve({ json: () => Promise.resolve({ proxy: "直连", results: [
+      { name: "Bangumi", purpose: "识别只有 Bangumi ID 的剧", ok: false, seconds: 10,
+        detail: "api.bgm.tv 连不上：ConnectTimeout（直连）：<timed out>" },
+      { name: "Jimaku", purpose: "下载字幕", ok: true, seconds: 0.8, detail: "正常" }] }) });
+  }
   if (u.pathname.endsWith("/health")) {
     body = { ok: true, jimaku_token_configured: true, lang_suffix: "ja", preferred_sources: [] };
   } else if (u.pathname.endsWith("/library")) {
@@ -255,6 +261,16 @@ test("每集可展开识别过程，内容经过转义", async () => {
   assert.match(out, /识别过程（1 条）/);
   assert.ok(out.includes("&lt;timed out&gt;"), "日志里的尖括号必须转义");
   assert.equal(out.includes("<timed out>"), false);
+});
+
+test("点「网络自检」逐站显示结果", async () => {
+  const el = { dataset: { act: "netcheck" }, getAttribute: () => null, closest: () => el };
+  listeners.click.forEach(fn => fn({ target: el, preventDefault() {} }));
+  await settle(50);
+  const out = doc.getElementById("netOut").innerHTML;
+  assert.match(out, /❌ Bangumi/);
+  assert.match(out, /✅ Jimaku/);
+  assert.ok(out.includes("&lt;timed out&gt;"), "报错原因里的尖括号必须转义");
 });
 
 test("已删除「找剧」「查候选字幕」两个独立模块", () => {

@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse
 
 from . import PLUGIN_DIR  # noqa: F401  —— 导入即把 core 加进 sys.path
 
-from core import bangumi, http, identify, jimaku, library, picker, placer, scan as scanner, trace
+from core import bangumi, http, identify, jimaku, library, netcheck, picker, placer, scan as scanner, trace
 from core.settings import settings
 
 app = FastAPI(title="JaSubAuto 调试壳", description="生产请用 MoviePilot 插件，这里只用于脱机调试")
@@ -48,6 +48,11 @@ def health() -> dict:
             "merge_bilingual": settings.merge_bilingual,
             "keep_japanese_only": settings.keep_japanese_only,
             "proxy": http.describe_proxy()}
+
+
+@app.get("/api/netcheck")
+def api_netcheck() -> dict:
+    return netcheck.run()
 
 
 @app.get("/api/library")

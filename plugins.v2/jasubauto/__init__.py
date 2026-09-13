@@ -20,7 +20,7 @@ from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.types import EventType
 
-from .core import bangumi, http, identify, jimaku, library, picker, placer, scan as scanner, trace
+from .core import bangumi, http, identify, jimaku, library, netcheck, picker, placer, scan as scanner, trace
 from .core.settings import configure, settings as core_settings
 
 UI_HTML = Path(__file__).parent / "core" / "ui.html"
@@ -219,6 +219,8 @@ class JaSubAuto(_PluginBase):
              "summary": "下载并落盘单个字幕"},
             {**common, "path": "/scan", "endpoint": self.api_scan, "methods": ["POST"],
              "summary": "批量补扫一个番剧文件夹"},
+            {**common, "path": "/netcheck", "endpoint": self.api_netcheck, "methods": ["GET"],
+             "summary": "网络自检"},
         ]
 
     def api_ui(self) -> HTMLResponse:
@@ -245,6 +247,10 @@ class JaSubAuto(_PluginBase):
             "keep_japanese_only": core_settings.keep_japanese_only,
             "proxy": http.describe_proxy(),
         }
+
+    def api_netcheck(self) -> dict:
+        """从 MoviePilot 容器里挨个试连外部站点，页面「网络自检」用。"""
+        return netcheck.run()
 
     def api_library(self, q: str = "", root: str = "") -> dict:
         """按关键字在番剧库里找剧。q 为空只报总数，不铺满一屏。"""
