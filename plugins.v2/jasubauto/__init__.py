@@ -140,7 +140,7 @@ class JaSubAuto(_PluginBase):
     plugin_name = "日语字幕补全（Jimaku）"
     plugin_desc = "入库后自动从 jimaku.cc 补日语字幕，并提供手动挑选/整部剧批量补扫的网页"
     plugin_icon = "jasubauto.png"          # 解析到本仓库的 icons/ 下
-    plugin_version = "0.7.1"
+    plugin_version = "0.7.2"
     plugin_author = "dewe001"
     author_url = "https://github.com/dewe001"
     plugin_config_prefix = "jasubauto_"
