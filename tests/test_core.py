@@ -873,3 +873,12 @@ def test_plugin_icon_is_a_full_url():
     import re
     icon = re.search(r'plugin_icon = "([^"]+)"', _plugin_source()).group(1)
     assert icon.startswith("https://") and icon == _package()["icon"]
+
+
+def test_package_is_released_and_versions_match():
+    """release=true 时 MoviePilot 从 GitHub Release 安装，不经镜像站缓存；Release 由 Actions 按 version 打包。"""
+    import re
+    version = re.search(r'plugin_version = "([^"]+)"', _plugin_source()).group(1)
+    package = _package()
+    assert package["release"] is True
+    assert package["version"] == version and f"v{version}" in package["history"]

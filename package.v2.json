@@ -6,6 +6,7 @@
     "version": "0.7.2",
     "icon": "https://raw.githubusercontent.com/dewe001/JaSubAuto/main/icons/jasubauto.png",
     "author": "dewe001",
+    "release": true,
     "level": 1,
     "labels": [
       "字幕"

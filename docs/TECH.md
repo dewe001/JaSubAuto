@@ -433,6 +433,20 @@ v0.7.1 部署后上伊那牡丹 12 集全部「未识别」，一次扫描超过
 排查手段：手动页面「网络自检」，或 `GET /api/v1/plugin/JaSubAuto/netcheck?apikey=...`；
 逐集的识别过程在扫描结果里展开，也写进 MoviePilot 日志。
 
+### 发布：GitHub Release（2026-09-13 实测）
+
+- **手动更新反而退回旧版本**：没声明 `release` 的插件，MoviePilot 先用 GitHub API 取文件清单，再逐个下载
+  `download_url`（raw.githubusercontent.com 的固定地址，不带版本号）。下载**优先走「GitHub 加速」镜像站**
+  （`settings.GITHUB_PROXY`），镜像站按地址缓存，于是 0.7.2 的更新装回了 0.7.0 的文件。
+  插件索引刷新时带时间戳防缓存，下载文件时不带
+- **改用 Release**：`package.v2.json` 标 `"release": true` 后，MoviePilot 按 tag `JaSubAuto_v<version>`
+  找资产 `jasubauto_v<version>.zip`，经 GitHub API 下载，不走镜像站。Release 还没生成时自动退回文件清单安装
+- 压缩包由 `.github/workflows/release.yml` 在 `package.v2.json` 变化时打包：文件放在包的根目录；
+  version 与 `plugin_version` 不一致直接失败；同一个 tag 已存在就跳过，所以**每次发布必须 bump 版本号**
+- **图标**：前端对 `http` 开头的图标经后端图片代理加载，否则去它自带的 `plugin_icon/` 目录找——那里只有官方插件的图标。
+  所以插件类的 `plugin_icon` 和 `package.v2.json` 的 `icon` 都写完整的 raw 地址
+  （`raw.githubusercontent.com` 在 MoviePilot 默认的图片域名白名单 `SECURITY_IMAGE_DOMAINS` 里）
+
 ## 部署环境（已确认，2026-09-06）
 
 | 项 | 值 |
