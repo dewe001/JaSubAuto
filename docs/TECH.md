@@ -4,6 +4,62 @@
 **开发时要遵守的规则在 [`../CLAUDE.md`](../CLAUDE.md)**——那份要保持短，
 新增的技术细节写到这里，别往那份里塞。
 
+## 当前技术约束
+
+每一条都是踩过坑之后定的，要改先说明为什么（CLAUDE.md 的规则）。来龙去脉见后面各节。
+
+**边界**
+
+- 不引入 Sonarr / Radarr / Bazarr：Bazarr 虽有 Jimaku provider（[PR #2505](https://github.com/morpheus65535/bazarr/pull/2505)），
+  但强制依赖 *arr 提供媒体库信息，等于两套系统管同一个库。MoviePilot 已有识别结果和入库事件
+- 与 Jellyfin 只有两处关系：按它的命名约定落盘、读它写在媒体库里的 nfo。不调用任何媒体服务器 API
+- 手动页面是插件 API 直接返回的原生 HTML，不写 Vue 联邦插件页；不再拆独立服务（拆过又合回来了，见「架构」）
+- 暂不引入 LLM：集号解析和 ID 映射都是确定性问题。唯一可能有价值的是映射表查不到时的标题消歧，
+  若日后实测该路径误判率高，再作为可选 refiner 接在 `identify.search_anilist` 后面
+
+**写盘**
+
+- 落盘命名固定 `<视频文件 basename>.<语言后缀><扩展名>`，与视频同目录
+- 覆盖已有字幕只有手动模式勾「覆盖已有」一个入口（`placer.place(overwrite=True)`）；自动入库路径永远不传
+- 调试期三个安全阀：探针模式、dry-run、剧集白名单
+
+**匹配**
+
+- 主路径是 ID：`tmdb_id` → 离线映射表 → `anilist_id` → Jimaku。
+  nfo 里只有 Bangumi ID 的剧：`bangumi_id` → BangumiExtLinker → MAL/AniDB → 映射表 → `anilist_id`
+- 标题匹配只许全等：唯一放行的是 Bangumi 条目在映射表里没有外链时，用它的日文原名/别名
+  与 Jimaku 条目名一字不差地比，唯一命中且开播年份相差不超过 1 年才算识别成功。
+  Jimaku 的标题搜索是模糊的，绝不能取第一条；AniList 标题搜索的结果永远不算可信
+- 剧级 Bangumi ID 只对应第一季：第 2 季往后必须有 season.nfo 或集 nfo 里的 ID
+- 中文剧名不能拿去搜 AniList（实测时灵时不灵）。按中文名选剧一律走 `library.py` 读 `tvshow.nfo`
+- nfo 里的 `<id>` 不是 tmdb：Jellyfin 往里写的是 TVDB ID。只认 `<tmdbid>` 和 `<uniqueid type="tmdb">`
+- 身份不唯一就不下载：认不准是哪部剧、哪一集（映射表查不到、标题搜索命中、季号为 0）交人工
+- 版本不唯一按规则挑：同一集同一语言档的候选依次按 同一份取 srt → 与视频同组 → 覆盖集数最多的组 →
+  组内最近更新 → 组名。除第一步外必须按组算，保证整部剧落在同一个组
+
+**字幕内容**
+
+- 语言分档是主导项：片源偏好加分上限 19，小于分档最小间距 20
+- 清洗只删行首整组标注和整行标注，行中间的括号不碰（`面白い（笑）` 是台词）
+- 合并中日双语匹配率低于 50% 就不合，写纯日语
+- 中文只认视频旁边的外置字幕文件；内嵌轨和硬字幕不处理（抽内嵌轨要 ffmpeg，容器里没法保证有）
+- 合并后必须另存一份纯日语 `<视频名>.原文.ja.srt`
+- 以上任何一步不确定，都退回"原样写入下载到的字幕"
+
+**外部接口**
+
+- Jimaku 认证 `Authorization: <token>`，不带 `Bearer ` 前缀
+- Jimaku 限速 25 请求/分钟/Key，所有调用走统一节流器
+
+**写代码时踩过的坑**
+
+- `season` 不能用 `x or 1` 取默认值：季号 0 是合法值（特典），会被当成第 1 季。用 `if x is not None`
+- 路径入参先判空再进 `pathlib`：`Path("")` 是 `WindowsPath('.')`，`.with_name()` 直接抛 `ValueError`
+- `video_path` 是目录时不能直接 `.with_name()`，会算出目录的同级兄弟。一律先过 `placer.resolve_video()`
+- 区分两种集号：`library_episode`（媒体库口径，找视频用）和 `Resolution.episode`（AniList 口径，匹配字幕用）。
+  分季错位的番里两者不等，传错会给第 29 集配第 1 集的字幕
+- 改完调试壳要重启；旧进程占着端口时新进程静默 bind 失败。`netstat -ano | grep :8990` 找 PID 再 `taskkill //F //PID <pid>`
+
 ## 字幕内容处理（为什么是现在这些规则）
 
 ### 语言分档与片源偏好
