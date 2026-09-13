@@ -855,3 +855,30 @@ def test_netcheck_tells_reachable_from_unreachable(monkeypatch):
     by_name = {r["name"]: r for r in netcheck.run()["results"]}
     assert by_name["Bangumi"]["ok"] is False and "ConnectTimeout" in by_name["Bangumi"]["detail"]
     assert by_name["AniList"]["ok"] is True and by_name["Jimaku"]["ok"] is True
+
+
+# ---------- 发布 ----------
+
+def _plugin_source() -> str:
+    return (PROJECT_ROOT / "plugins.v2" / "jasubauto" / "__init__.py").read_text(encoding="utf-8")
+
+
+def _package() -> dict:
+    import json
+    return json.loads((PROJECT_ROOT / "package.v2.json").read_text(encoding="utf-8"))["JaSubAuto"]
+
+
+def test_plugin_icon_is_a_full_url():
+    """第三方插件的图标必须写完整地址：只写文件名时，MoviePilot 去它自带的 plugin_icon 目录找，那里只有官方图标。"""
+    import re
+    icon = re.search(r'plugin_icon = "([^"]+)"', _plugin_source()).group(1)
+    assert icon.startswith("https://") and icon == _package()["icon"]
+
+
+def test_package_is_released_and_versions_match():
+    """release=true 时 MoviePilot 从 GitHub Release 安装，不经镜像站缓存；Release 由 Actions 按 version 打包。"""
+    import re
+    version = re.search(r'plugin_version = "([^"]+)"', _plugin_source()).group(1)
+    package = _package()
+    assert package["release"] is True
+    assert package["version"] == version and f"v{version}" in package["history"]

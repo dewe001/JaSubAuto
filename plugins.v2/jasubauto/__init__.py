@@ -139,8 +139,9 @@ def _target_files(transferinfo) -> list:
 class JaSubAuto(_PluginBase):
     plugin_name = "日语字幕补全（Jimaku）"
     plugin_desc = "入库后自动从 jimaku.cc 补日语字幕，并提供手动挑选/整部剧批量补扫的网页"
-    plugin_icon = "jasubauto.png"          # 解析到本仓库的 icons/ 下
-    plugin_version = "0.7.2"
+    # 必须写完整地址：只写文件名时 MoviePilot 去它自带的 plugin_icon 目录找，那里只有官方插件的图标
+    plugin_icon = "https://raw.githubusercontent.com/dewe001/JaSubAuto/main/icons/jasubauto.png"
+    plugin_version = "0.7.3"
     plugin_author = "dewe001"
     author_url = "https://github.com/dewe001"
     plugin_config_prefix = "jasubauto_"

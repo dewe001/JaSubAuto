@@ -1,0 +1,44 @@
+name: Plugin Release
+
+# package.v2.json 变了就按 version 打包发布 GitHub Release。
+# 索引里 release=true 时 MoviePilot 从 Release 下载安装：走 GitHub API，不经「GitHub 加速」镜像站，
+# 不会像逐个下载文件那样拿到镜像站缓存的旧版本。
+on:
+  push:
+    branches: [main]
+    paths: [package.v2.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 打包并发布
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          plugin_id=JaSubAuto
+          plugin_dir=plugins.v2/jasubauto
+          version=$(jq -r --arg id "$plugin_id" '.[$id].version' package.v2.json)
+          code_version=$(sed -nE 's/^[[:space:]]*plugin_version = "([^"]+)".*/\1/p' "$plugin_dir/__init__.py")
+          if [ "$version" != "$code_version" ]; then
+            echo "package.v2.json 的 version（$version）和 plugin_version（$code_version）不一致" >&2
+            exit 1
+          fi
+          tag="${plugin_id}_v${version}"
+          # MoviePilot 按 tag 名小写找资产：jasubauto_v<版本>.zip
+          asset="$(echo "$tag" | tr '[:upper:]' '[:lower:]').zip"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag 已经发布过，跳过"
+            exit 0
+          fi
+          notes=$(jq -r --arg id "$plugin_id" --arg v "v$version" '.[$id].history[$v] // ("Release " + $v)' package.v2.json)
+          # 文件放在压缩包根目录，MoviePilot 解压到 app/plugins/jasubauto
+          (cd "$plugin_dir" && zip -r -D "$GITHUB_WORKSPACE/$asset" . -x "*__pycache__*" -x "*.pyc")
+          gh release create "$tag" "$asset" --title "$tag" --notes "$notes" --target "$GITHUB_SHA"
