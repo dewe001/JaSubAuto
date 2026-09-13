@@ -3,7 +3,7 @@
     "id": "JaSubAuto",
     "name": "日语字幕补全（Jimaku）",
     "description": "入库后自动从 jimaku.cc 补日语字幕，并提供手动挑选与整部剧批量补扫的网页。无需额外服务或容器。",
-    "version": "0.7.2",
+    "version": "0.7.3",
     "icon": "https://raw.githubusercontent.com/dewe001/JaSubAuto/main/icons/jasubauto.png",
     "author": "dewe001",
     "release": true,
@@ -12,6 +12,7 @@
       "字幕"
     ],
     "history": {
+      "v0.7.3": "修复插件图标不显示；改用 GitHub Release 发布，避免手动更新时经 GitHub 加速镜像站装回旧版本",
       "v0.7.2": "修复国内网络下只有 Bangumi ID 的剧全部未识别、扫描极慢：外部请求改为走代理（默认跟随 MoviePilot 的代理设置，可在插件配置里单独填）；连不上的站 5 分钟内直接跳过；手动页面逐集显示识别过程和报错原因，并写入 MoviePilot 日志；新增网络自检",
       "v0.7.1": "支持只有 Bangumi ID 的剧（Jellyfin 的 Bangumi 插件刮削）：读 tvshow.nfo / season.nfo / 集 nfo 里的 Bangumi ID，经映射表或日文原名、罗马音别名全等匹配找到 AniList 条目，支持本季编号、Bangumi 连续编号和 TMDB 跨季连续编号；手动页面可填 Bangumi ID，三个 ID 都不填时自动读 tvshow.nfo；换剧时清掉上一部剧留下的 ID；不再把 nfo 里的 <id>（Jellyfin 写的是 TVDB ID）当成 tmdb。同一集有多个同分候选时不再交人工，按规则自动挑：同一份字幕的 ass/srt 取 srt → 与视频同一发布组 → 覆盖集数最多的组 → 组内最近更新，整部剧各集保持同一个组，选定理由写在结果里；修复「2nd Season」这类单集被当成合集丢掉、「01-04」合集被当成单集的问题",
       "v0.7.0": "字幕偏好默认改为中日双语优先（可切回纯日语优先）；写盘前清掉说话人标注（（アイゼン））、音效描述和纯音符行，可开关；视频旁边有中文字幕时按时间轴合成中日双语，时间轴对不上则放弃合并，合并后另存一份纯日语 <视频名>.原文.ja.srt；手动模式可勾「覆盖已有」直接替换旧字幕（扩展名不同的旧文件会一并删除）；片源偏好加分设上限，不再能盖过语言档差；CLAUDE.md 拆分，技术细节移到 docs/TECH.md",
