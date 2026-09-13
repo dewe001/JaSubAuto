@@ -16,7 +16,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "plugins.v2" / "jasubauto"))
 
-from core import bangumi, cleaner, identify, jimaku, library, merge, picker, placer, scan  # noqa: E402
+from core import bangumi, cleaner, http, identify, jimaku, library, merge, picker, placer, scan  # noqa: E402
 from core.settings import settings  # noqa: E402
 
 
@@ -44,6 +44,7 @@ def _settings(tmp_path_factory, monkeypatch):
     settings.strip_annotations = True
     settings.merge_bilingual = True
     settings.keep_japanese_only = True
+    settings.proxy = ""
     # 单测不许联网：Bangumi API、Jimaku 标题搜索、AniList 开播年份一律换成假数据
     monkeypatch.setattr(bangumi, "_api_get", _fake_bangumi_api)
     monkeypatch.setattr(jimaku, "search_by_title", lambda q: list(JIMAKU_ENTRIES))
@@ -729,3 +730,44 @@ def test_scan_reads_bangumi_id_from_nfo(tmp_path, monkeypatch):
     rep = scan.scan(str(show), dry_run=True)
     ep = rep.episodes[0]
     assert (ep.status, ep.anilist_id, ep.anilist_episode) == ("dry_run", 154587, 5), ep.reason
+
+
+# ---------- 代理 ----------
+
+class _FakeResponse:
+    status_code, content = 200, b"{}"
+
+
+class _RecordingClient:
+    """记下 httpx.Client 收到的参数，不真的发请求。"""
+    seen: dict = {}
+
+    def __init__(self, **kwargs):
+        _RecordingClient.seen = kwargs
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def request(self, *args, **kwargs):
+        return _FakeResponse()
+
+
+def test_requests_go_through_configured_proxy(monkeypatch):
+    """api.bgm.tv 在国内直连不通：外部请求都要走代理（插件里默认跟随 MoviePilot 的设置）。"""
+    monkeypatch.setattr(http._httpx, "Client", _RecordingClient)
+    settings.proxy = "192.168.1.2:7890"
+    http.get_json("https://api.bgm.tv/v0/subjects/1")
+    assert _RecordingClient.seen["proxy"] == "http://192.168.1.2:7890"
+    settings.proxy = ""
+    http.get_json("https://api.bgm.tv/v0/subjects/1")
+    assert _RecordingClient.seen["proxy"] is None
+
+
+def test_proxy_description_hides_credentials():
+    settings.proxy = "http://user:secret@10.0.0.2:7890"
+    assert http.describe_proxy() == "http://***@10.0.0.2:7890"
+    settings.proxy = ""
+    assert http.describe_proxy() == "直连"

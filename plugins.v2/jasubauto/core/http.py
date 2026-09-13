@@ -1,15 +1,18 @@
-"""极薄的 HTTP 封装。
+"""极薄的 HTTP 封装，所有外部请求的唯一出口。
 
-存在的唯一理由是让核心逻辑不绑定任何一个 HTTP 库：
-  * MoviePilot 容器里一定有 requests（它自己在用）
-  * 独立调试时用 httpx
-两个都不在才报错。**不要用 stdlib 的 urllib**：Windows 上它走系统证书库，
-连 jimaku.cc 会报 CERTIFICATE_VERIFY_FAILED（证书过期），httpx/requests 走 certifi 则正常。
+不绑定某一个 HTTP 库：MoviePilot 容器里一定有 requests，独立调试时用 httpx，两个都不在才报错。
+**不要用 stdlib 的 urllib**：Windows 上它走系统证书库，连 jimaku.cc 会报 CERTIFICATE_VERIFY_FAILED。
+
+所有请求走 `settings.proxy`（插件里默认跟随 MoviePilot 的代理设置）：api.bgm.tv 在国内直连不通，
+MoviePilot 自带的 Bangumi 模块也是走代理的。
 """
 
 from __future__ import annotations
 
 import json as _json
+from urllib.parse import urlsplit, urlunsplit
+
+from .settings import settings
 
 try:                                    # 优先 httpx
     import httpx as _httpx
@@ -27,17 +30,46 @@ if _httpx is None and _requests is None:  # pragma: no cover
 class HttpError(RuntimeError):
     def __init__(self, message: str, status: int | None = None):
         super().__init__(message)
-        self.status = status
+        self.status = status      # None 表示根本没连上（超时、拒绝、代理不通）
 
+
+# ---------- 代理 ----------
+
+def proxy_url() -> str | None:
+    proxy = (settings.proxy or "").strip()
+    if not proxy:
+        return None
+    return proxy if "://" in proxy else f"http://{proxy}"
+
+
+def describe_proxy() -> str:
+    """给页面和日志看的代理说明，隐去账号密码。"""
+    proxy = proxy_url()
+    if not proxy:
+        return "直连"
+    parts = urlsplit(proxy)
+    netloc = (parts.hostname or "") + (f":{parts.port}" if parts.port else "")
+    if parts.username:
+        netloc = "***@" + netloc
+    return urlunsplit((parts.scheme, netloc, "", "", ""))
+
+
+# ---------- 请求 ----------
 
 def _request(method: str, url: str, *, headers=None, params=None, json=None,
              timeout: float = 30) -> tuple[int, bytes]:
+    proxy = proxy_url()
     if _httpx is not None:
-        with _httpx.Client(timeout=timeout, follow_redirects=True) as c:
+        try:
+            client = _httpx.Client(timeout=timeout, follow_redirects=True, proxy=proxy)
+        except TypeError:                              # httpx < 0.26 的参数名是 proxies
+            client = _httpx.Client(timeout=timeout, follow_redirects=True, proxies=proxy)
+        with client as c:
             r = c.request(method, url, headers=headers, params=params, json=json)
             return r.status_code, r.content
     r = _requests.request(method, url, headers=headers, params=params, json=json,
-                          timeout=timeout, allow_redirects=True)
+                          timeout=timeout, allow_redirects=True,
+                          proxies={"http": proxy, "https": proxy} if proxy else None)
     return r.status_code, r.content
 
 

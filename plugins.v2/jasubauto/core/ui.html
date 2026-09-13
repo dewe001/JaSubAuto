@@ -157,6 +157,7 @@ function post(path, body){
 fetch(U('/health')).then(r=>r.json()).then(h=>{
   $('health').textContent = (h.jimaku_token_configured ? 'Jimaku 已配置' : '⚠ 未配置 Jimaku Token')
     + ' · .' + h.lang_suffix
+    + (h.proxy ? ' · ' + (h.proxy === '直连' ? '不走代理' : '代理 ' + h.proxy) : '')
     + ' · ' + (h.subtitle_pref === 'japanese' ? '纯日语优先' : '中日双语优先')
     + (h.strip_annotations ? ' · 去说话人标注' : '')
     + (h.merge_bilingual ? ' · 合并中文字幕' : '')

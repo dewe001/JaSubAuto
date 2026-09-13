@@ -20,7 +20,7 @@ from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.types import EventType
 
-from .core import bangumi, identify, jimaku, library, picker, placer, scan as scanner
+from .core import bangumi, http, identify, jimaku, library, picker, placer, scan as scanner
 from .core.settings import configure, settings as core_settings
 
 UI_HTML = Path(__file__).parent / "core" / "ui.html"
@@ -97,6 +97,16 @@ def _bangumi_id(mediainfo):
         return None
 
 
+def _mp_proxy() -> str:
+    """MoviePilot 的代理设置：PROXY_HOST，没填时它会退回 HTTPS_PROXY / HTTP_PROXY 环境变量。"""
+    try:
+        from app.core.config import settings as mp_settings
+        proxies = mp_settings.PROXY or {}
+        return proxies.get("https") or proxies.get("http") or ""
+    except Exception:
+        return ""
+
+
 def _path_of(item):
     """把 fileitem / 路径字符串统一成路径字符串。"""
     if item is None:
@@ -160,6 +170,8 @@ class JaSubAuto(_PluginBase):
             "media_roots": config.get("media_roots", ""),
             "data_dir": self._data_dir(),
         })
+        # 代理不走 configure：它把空字符串当"没填"跳过，清空配置后会残留上一次的值
+        core_settings.proxy = (config.get("proxy") or "").strip() or _mp_proxy()
 
     def _data_dir(self) -> str:
         """映射表（7.5MB）落在插件的数据目录，插件更新不会被清掉。"""
@@ -230,6 +242,7 @@ class JaSubAuto(_PluginBase):
             "strip_annotations": core_settings.strip_annotations,
             "merge_bilingual": core_settings.merge_bilingual,
             "keep_japanese_only": core_settings.keep_japanese_only,
+            "proxy": http.describe_proxy(),
         }
 
     def api_library(self, q: str = "", root: str = "") -> dict:
@@ -332,6 +345,11 @@ class JaSubAuto(_PluginBase):
                                            "placeholder": "在 https://jimaku.cc/profile 申请"}),
                 ]},
                 {"component": "VRow", "content": [
+                    col(12, "VTextField", {"model": "proxy",
+                                           "label": "代理（留空跟随 MoviePilot 的代理设置）",
+                                           "placeholder": "http://192.168.1.2:7890"}),
+                ]},
+                {"component": "VRow", "content": [
                     col(6, "VTextField", {"model": "media_roots", "label": "媒体库根目录（逗号分隔）",
                                           "placeholder": "/媒体"}),
                     col(6, "VTextField", {"model": "series_whitelist",
@@ -366,7 +384,7 @@ class JaSubAuto(_PluginBase):
                                 "已存在的字幕文件永远不会被覆盖。"}}]}]},
             ],
         }], {"enabled": False, "probe_only": True, "dry_run": True,
-             "jimaku_api_token": "", "media_roots": "", "series_whitelist": "",
+             "jimaku_api_token": "", "proxy": "", "media_roots": "", "series_whitelist": "",
              "fansub_whitelist": "Netflix,Amazon,SubsPlease,Moozzi2", "lang_suffix": "ja",
              "subtitle_pref": "bilingual", "strip_annotations": True,
              "merge_bilingual": True, "keep_japanese_only": True}
